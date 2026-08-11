@@ -4,6 +4,7 @@ import {
   CONTENT_STATUS_META,
   CONTENT_TYPE_LABELS,
   PLATFORM_LABELS,
+  formatDate,
   formatDateTime,
   toDateTimeLocal,
   toIsoFromLocal,
@@ -16,16 +17,18 @@ import {
   ErrorState,
   Field,
   Input,
+  LocalDateTimeInput,
   Modal,
   PageHeader,
   Select,
   Spinner,
   StatusBadge,
 } from '../components/ui';
+import { getLocale, useI18n } from '../i18n';
 
-const monthFormatter = new Intl.DateTimeFormat('tr-TR', { month: 'long', year: 'numeric' });
-const dayFormatter = new Intl.DateTimeFormat('tr-TR', { weekday: 'short', day: 'numeric', month: 'short' });
-const timeFormatter = new Intl.DateTimeFormat('tr-TR', { hour: '2-digit', minute: '2-digit' });
+const formatMonth = (value) => new Intl.DateTimeFormat(getLocale(), { month: 'long', year: 'numeric' }).format(value);
+const formatDay = (value) => new Intl.DateTimeFormat(getLocale(), { weekday: 'short', day: 'numeric', month: 'short' }).format(value);
+const formatTime = (value) => new Intl.DateTimeFormat(getLocale(), { hour: '2-digit', minute: '2-digit' }).format(value);
 const weekDays = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
 
 function startOfMonth(date) {
@@ -59,6 +62,7 @@ function sameDay(left, right) {
 }
 
 function ScheduleEditor({ content, initialDay, notify, onSaved }) {
+  const droppedOnDay = Boolean(initialDay && !content.scheduledAt);
   const baseDate = content.scheduledAt ? new Date(content.scheduledAt) : initialDay || new Date(Date.now() + 15 * 60 * 1000);
   if (!content.scheduledAt && initialDay) {
     baseDate.setHours(10, 0, 0, 0);
@@ -69,9 +73,14 @@ function ScheduleEditor({ content, initialDay, notify, onSaved }) {
 
   const submit = async (event) => {
     event.preventDefault();
+    const scheduledIso = toIsoFromLocal(value);
+    if (!scheduledIso || new Date(scheduledIso) <= new Date()) {
+      notify('Geçerli ve gelecekte bir tarih ve saat girin.', 'error');
+      return;
+    }
     setBusy(true);
     try {
-      const updated = await api.scheduleContent(content.id, toIsoFromLocal(value));
+      const updated = await api.scheduleContent(content.id, scheduledIso);
       notify(content.status === 'FAILED' ? 'İçerik yeniden yayın kuyruğuna alındı.' : 'Takvim güncellendi.');
       onSaved(updated);
     } catch (error) {
@@ -88,15 +97,76 @@ function ScheduleEditor({ content, initialDay, notify, onSaved }) {
         <p className="mt-3 text-sm font-semibold leading-6 text-slate-700">{truncate(content.text, 180)}</p>
         {content.failureReason && <p className="mt-3 rounded-xl bg-rose-50 p-3 text-xs leading-5 text-rose-700">{content.failureReason}</p>}
       </div>
-      <Field label="Yayın tarihi ve saati" hint="Gelecekte bir zaman seçin" required>
-        <Input type="datetime-local" min={toDateTimeLocal(new Date())} value={value} required onChange={(event) => setValue(event.target.value)} />
+      <Field label={droppedOnDay ? 'Yayın saati' : 'Yayın tarihi ve saati'} hint={droppedOnDay ? 'Seçilen gün değiştirilemez' : 'Gelecekte bir zaman seçin'} required>
+        <LocalDateTimeInput value={value} required dateReadOnly={droppedOnDay} timeInitiallyBlank={droppedOnDay} onChange={setValue} />
       </Field>
       <div className="mt-6 flex justify-end"><Button type="submit" disabled={busy}>{busy ? 'Kaydediliyor…' : content.status === 'FAILED' ? 'Yeniden dene' : content.status === 'SCHEDULED' ? 'Yeniden planla' : 'Takvime ekle'}</Button></div>
     </form>
   );
 }
 
+function DayPlanner({ day, drafts, notify, onSaved }) {
+  const [draftId, setDraftId] = useState('');
+  const draft = drafts.find((item) => String(item.id) === draftId);
+
+  if (!drafts.length) {
+    return <EmptyState title="Planlanabilecek taslak yok" description="Yeni bir içerik ürettiğinizde taslaklar burada seçilebilir." />;
+  }
+
+  return (
+    <div className="space-y-5">
+      <Field label="Yayınlanacak taslak" required>
+        <Select value={draftId} required onChange={(event) => setDraftId(event.target.value)}>
+          <option value="">Taslak seçin</option>
+          {drafts.map((item) => (
+            <option key={item.id} value={item.id}>
+              {PLATFORM_LABELS[item.platform]} · {CONTENT_TYPE_LABELS[item.contentType]} · {truncate(item.text, 70)}
+            </option>
+          ))}
+        </Select>
+      </Field>
+      {draft && <ScheduleEditor key={draft.id} content={draft} initialDay={day} notify={notify} onSaved={onSaved} />}
+    </div>
+  );
+}
+
+function DayOverview({ events, onOpenDetails, onPlanNew, canPlan }) {
+  return (
+    <div className="space-y-5">
+      <div className="space-y-2">
+        {!events.length && (
+          <div className="rounded-xl border border-dashed border-slate-200 px-4 py-6 text-center text-sm text-slate-400 dark:border-slate-700">
+            Bu güne planlanmış yayın yok.
+          </div>
+        )}
+        {events.map((event) => {
+          const meta = CONTENT_STATUS_META[event.status] || CONTENT_STATUS_META.DEFAULT;
+          return (
+            <button key={event.id} type="button" onClick={() => onOpenDetails(event)} className="w-full rounded-xl border border-slate-200 p-4 text-left transition hover:border-blue-300 hover:bg-blue-50/40 dark:border-slate-700 dark:hover:border-blue-700 dark:hover:bg-blue-950/20">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusBadge label={meta.label} tone={meta.tone} />
+                  <span className="text-xs font-bold text-slate-500">{PLATFORM_LABELS[event.platform]} · {CONTENT_TYPE_LABELS[event.contentType]}</span>
+                </div>
+                <span className="text-xs font-bold text-slate-500">{formatTime(new Date(event.scheduledAt))}</span>
+              </div>
+              <p className="mt-3 text-sm font-semibold leading-6 text-slate-700 dark:text-slate-300">{truncate(event.text, 150)}</p>
+              <p className="mt-2 text-xs font-semibold text-blue-600 dark:text-blue-400">Ayrıntıları görüntüle →</p>
+            </button>
+          );
+        })}
+      </div>
+      {canPlan && (
+        <div className="flex justify-end border-t border-slate-100 pt-4 dark:border-slate-800">
+          <Button onClick={onPlanNew}>＋ Yeni yayın planla</Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function CalendarPage({ notify }) {
+  const { locale, t } = useI18n();
   const [month, setMonth] = useState(startOfMonth(new Date()));
   const [platforms, setPlatforms] = useState([]);
   const [filters, setFilters] = useState({ status: '', platform: '' });
@@ -107,6 +177,10 @@ export default function CalendarPage({ notify }) {
   const [selected, setSelected] = useState(null);
   const [selectedDay, setSelectedDay] = useState(null);
   const [cancelBusy, setCancelBusy] = useState(false);
+  const [draggedDraftId, setDraggedDraftId] = useState(null);
+  const [dropTarget, setDropTarget] = useState(null);
+  const [dayPlannerDay, setDayPlannerDay] = useState(null);
+  const [dayOverviewDay, setDayOverviewDay] = useState(null);
 
   const range = useMemo(() => ({ from: month.toISOString(), to: addMonths(month, 1).toISOString() }), [month]);
 
@@ -148,10 +222,46 @@ export default function CalendarPage({ notify }) {
     setSelectedDay(day);
   };
 
+  const openContentDetails = (event) => {
+    window.location.hash = `#/contents?contentId=${encodeURIComponent(event.id)}`;
+  };
+
   const changed = () => {
     setSelected(null);
     setSelectedDay(null);
     load();
+  };
+
+  const startDraftDrag = (event, draft) => {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', draft.id);
+    setDraggedDraftId(draft.id);
+  };
+
+  const finishDraftDrag = () => {
+    setDraggedDraftId(null);
+    setDropTarget(null);
+  };
+
+  const allowDraftDrop = (event, day) => {
+    if (!draggedDraftId || dateKey(day) < dateKey(new Date())) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    setDropTarget(dateKey(day));
+  };
+
+  const dropDraft = (event, day) => {
+    event.preventDefault();
+    const draftId = event.dataTransfer.getData('text/plain') || draggedDraftId;
+    const draft = drafts.find((item) => String(item.id) === String(draftId));
+    finishDraftDrag();
+    if (!draft) return;
+    if (dateKey(day) < dateKey(new Date())) {
+      notify('Geçmiş bir güne yayın planlanamaz.', 'error');
+      return;
+    }
+    setSelected(draft);
+    setSelectedDay(new Date(day));
   };
 
   const cancel = async () => {
@@ -178,7 +288,7 @@ export default function CalendarPage({ notify }) {
               <Button variant="secondary" size="sm" onClick={() => setMonth(addMonths(month, -1))}>←</Button>
               <Button variant="secondary" size="sm" onClick={() => setMonth(startOfMonth(new Date()))}>Bugün</Button>
               <Button variant="secondary" size="sm" onClick={() => setMonth(addMonths(month, 1))}>→</Button>
-              <h2 className="ml-2 text-lg font-extrabold capitalize text-slate-900">{monthFormatter.format(month)}</h2>
+              <h2 className="ml-2 text-lg font-extrabold capitalize text-slate-900">{formatMonth(month)}</h2>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <Select value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))}>
@@ -202,15 +312,24 @@ export default function CalendarPage({ notify }) {
                   const dayEvents = eventsByDay[dateKey(day)] || [];
                   const inMonth = day.getMonth() === month.getMonth();
                   const today = sameDay(day, new Date());
+                  const past = dateKey(day) < dateKey(new Date());
                   return (
-                    <div key={day.toISOString()} className={`min-h-32 border-b border-r border-slate-100 p-2 ${inMonth ? 'bg-white' : 'bg-slate-50/50'}`}>
+                    <div
+                      key={day.toISOString()}
+                      onClick={() => setDayOverviewDay(new Date(day))}
+                      onDragOver={(event) => allowDraftDrop(event, day)}
+                      onDragEnter={(event) => allowDraftDrop(event, day)}
+                      onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDropTarget(null); }}
+                      onDrop={(event) => dropDraft(event, day)}
+                      className={`min-h-32 cursor-pointer border-b border-r border-slate-100 p-2 transition-colors ${inMonth ? 'bg-white' : 'bg-slate-50/50'} ${past ? 'bg-slate-50/70 opacity-60 hover:opacity-75 dark:bg-slate-950/40' : 'hover:bg-blue-50/50 dark:hover:bg-blue-950/20'} ${dropTarget === dateKey(day) ? 'relative z-[1] bg-blue-50 opacity-100 ring-2 ring-inset ring-blue-500 dark:bg-blue-950/40' : ''}`}
+                    >
                       <div className="mb-2 flex items-center justify-between">
                         <span className={`grid h-7 w-7 place-items-center rounded-full text-xs font-bold ${today ? 'bg-indigo-600 text-white' : inMonth ? 'text-slate-600' : 'text-slate-300'}`}>{day.getDate()}</span>
                       </div>
                       <div className="space-y-1.5">
                         {dayEvents.slice(0, 3).map((event) => {
                           const meta = CONTENT_STATUS_META[event.status] || CONTENT_STATUS_META.DEFAULT;
-                          return <button key={event.id} onClick={() => openEvent(event, day)} className={`block w-full truncate rounded-lg border-l-2 px-2 py-1.5 text-left text-[10px] font-bold transition hover:brightness-95 ${meta.calendarClassName}`}>{timeFormatter.format(new Date(event.scheduledAt))} · {PLATFORM_LABELS[event.platform]}</button>;
+                          return <button key={event.id} onClick={(clickEvent) => { clickEvent.stopPropagation(); openEvent(event, day); }} className={`block w-full truncate rounded-lg border-l-2 px-2 py-1.5 text-left text-[10px] font-bold transition hover:brightness-95 ${meta.calendarClassName}`}>{formatTime(new Date(event.scheduledAt))} · {PLATFORM_LABELS[event.platform]}</button>;
                         })}
                         {dayEvents.length > 3 && <p className="px-2 text-[10px] font-bold text-slate-400">+{dayEvents.length - 3} içerik</p>}
                       </div>
@@ -225,7 +344,7 @@ export default function CalendarPage({ notify }) {
                   const meta = CONTENT_STATUS_META[event.status] || CONTENT_STATUS_META.DEFAULT;
                   return (
                     <button key={event.id} onClick={() => openEvent(event)} className="flex w-full items-center gap-3 rounded-2xl border border-slate-100 p-3 text-left">
-                      <div className="min-w-16 rounded-xl bg-slate-50 p-2 text-center"><p className="text-[10px] font-bold capitalize text-slate-400">{dayFormatter.format(new Date(event.scheduledAt)).split(' ')[0]}</p><p className="text-lg font-extrabold text-slate-800">{new Date(event.scheduledAt).getDate()}</p><p className="text-[10px] font-bold text-slate-400">{timeFormatter.format(new Date(event.scheduledAt))}</p></div>
+                      <div className="min-w-16 rounded-xl bg-slate-50 p-2 text-center"><p className="text-[10px] font-bold capitalize text-slate-400">{formatDay(new Date(event.scheduledAt)).split(' ')[0]}</p><p className="text-lg font-extrabold text-slate-800">{new Date(event.scheduledAt).getDate()}</p><p className="text-[10px] font-bold text-slate-400">{formatTime(new Date(event.scheduledAt))}</p></div>
                       <div className="min-w-0"><StatusBadge label={meta.label} tone={meta.tone} /><p className="mt-2 truncate text-sm font-bold text-slate-700">{PLATFORM_LABELS[event.platform]} · {CONTENT_TYPE_LABELS[event.contentType]}</p></div>
                     </button>
                   );
@@ -237,11 +356,18 @@ export default function CalendarPage({ notify }) {
 
         <Card className="h-fit p-5 xl:sticky xl:top-8">
           <div className="flex items-center justify-between"><div><p className="eyebrow">Planlanmamış</p><h2 className="mt-1 font-bold text-slate-900">Taslak kuyruğu</h2></div><span className="grid h-9 min-w-9 place-items-center rounded-full bg-slate-100 px-2 text-sm font-extrabold text-slate-700">{drafts.length}</span></div>
-          <p className="mt-2 text-xs leading-5 text-slate-400">Bir taslağı seçerek yayın tarihi belirleyin.</p>
+          <p className="mt-2 text-xs leading-5 text-slate-400">Bir taslağı takvimde istediğiniz güne sürükleyin veya seçerek yayın tarihi belirleyin.</p>
           <div className="mt-5 max-h-[620px] space-y-2 overflow-y-auto pr-1">
             {!drafts.length && !loading && <EmptyState title="Taslak yok" description="Üretim tamamlandığında taslaklar burada görünür." />}
             {drafts.map((draft) => (
-              <button key={draft.id} onClick={() => { setSelected(draft); setSelectedDay(null); }} className="w-full rounded-xl border border-slate-100 p-3 text-left transition hover:border-indigo-200 hover:bg-indigo-50/30">
+              <button
+                key={draft.id}
+                draggable
+                onDragStart={(event) => startDraftDrag(event, draft)}
+                onDragEnd={finishDraftDrag}
+                onClick={() => { setSelected(draft); setSelectedDay(null); }}
+                className={`w-full cursor-grab rounded-xl border p-3 text-left transition active:cursor-grabbing ${draggedDraftId === draft.id ? 'border-blue-300 bg-blue-50 opacity-60 dark:border-blue-700 dark:bg-blue-950/40' : 'border-slate-100 hover:border-blue-300 hover:bg-blue-50/40 dark:border-slate-800 dark:hover:border-blue-700 dark:hover:bg-blue-950/20'}`}
+              >
                 <div className="flex items-center justify-between gap-2"><span className="text-[10px] font-extrabold uppercase tracking-wide text-indigo-500">{PLATFORM_LABELS[draft.platform]}</span><span className="text-[10px] font-bold text-slate-400">{CONTENT_TYPE_LABELS[draft.contentType]}</span></div>
                 <p className="mt-2 text-xs font-semibold leading-5 text-slate-600">{truncate(draft.text, 95)}</p>
               </button>
@@ -255,6 +381,32 @@ export default function CalendarPage({ notify }) {
           <ScheduleEditor content={selected} initialDay={selectedDay} notify={notify} onSaved={changed} />
           {selected.status === 'SCHEDULED' && <div className="mt-4 flex justify-end border-t border-slate-100 pt-4"><Button variant="danger" disabled={cancelBusy} onClick={cancel}>{cancelBusy ? 'İptal ediliyor…' : 'Yayın planını iptal et'}</Button></div>}
         </>}
+      </Modal>
+
+      <Modal open={Boolean(dayPlannerDay)} title={t('Yeni yayın planla', 'Schedule a new publication')} description={dayPlannerDay ? `${formatDate(dayPlannerDay, locale)} · ${t('Seçilen gün değiştirilemez', 'The selected day cannot be changed')}` : ''} onClose={() => setDayPlannerDay(null)} size="md">
+        {dayPlannerDay && (
+          <DayPlanner
+            day={dayPlannerDay}
+            drafts={drafts}
+            notify={notify}
+            onSaved={() => { setDayPlannerDay(null); load(); }}
+          />
+        )}
+      </Modal>
+
+      <Modal open={Boolean(dayOverviewDay)} title={t('Günün yayınları', 'Publications for the day')} description={dayOverviewDay ? formatDate(dayOverviewDay, locale) : ''} onClose={() => setDayOverviewDay(null)} size="md">
+        {dayOverviewDay && (
+          <DayOverview
+            events={eventsByDay[dateKey(dayOverviewDay)] || []}
+            onOpenDetails={openContentDetails}
+            canPlan={dateKey(dayOverviewDay) >= dateKey(new Date())}
+            onPlanNew={() => {
+              const selectedDate = dayOverviewDay;
+              setDayOverviewDay(null);
+              setDayPlannerDay(selectedDate);
+            }}
+          />
+        )}
       </Modal>
     </>
   );

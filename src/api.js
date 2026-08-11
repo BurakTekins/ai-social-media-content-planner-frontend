@@ -66,24 +66,27 @@ function validationMessages(payload) {
   return [];
 }
 
+const ERROR_MESSAGES = {
+  access_denied: ['Hesap bağlantısına izin verilmedi.', 'Account connection was denied.'],
+  state_invalid: ['Bağlantı oturumu geçersiz veya süresi doldu.', 'The connection session is invalid or expired.'],
+  token_exchange_failed: ['Platform erişim anahtarı alınamadı.', 'The platform access token could not be obtained.'],
+  account_lookup_failed: ['Platform hesap bilgileri alınamadı.', 'Platform account details could not be retrieved.'],
+  permission_missing: ['Gerekli platform izinleri verilmemiş.', 'Required platform permissions were not granted.'],
+  configuration_error: ['Platform uygulama ayarları eksik veya hatalı.', 'Platform application settings are missing or invalid.'],
+};
+
 function errorMessage(payload, status) {
-  if (typeof payload === 'string' && payload.trim()) {
-    return payload.trim();
-  }
-
+  const language = getLanguage();
+  const pick = ([tr, en]) => language === 'en' ? en : tr;
   if (payload && typeof payload === 'object') {
-    const messages = validationMessages(payload);
-    if (messages.length > 0) {
-      return messages.join(' · ');
-    }
-
-    const message = payload.detail ?? payload.message ?? payload.error ?? payload.title;
-    if (typeof message === 'string' && message.trim()) {
-      return message.trim();
-    }
+    const rawError = typeof payload.error === 'string' && /^[A-Z0-9_.-]+$/i.test(payload.error) ? payload.error : null;
+    const code = payload.errorCode ?? payload.code ?? rawError;
+    if (code && ERROR_MESSAGES[code]) return `${pick(ERROR_MESSAGES[code])} (${code})`;
+    return language === 'en'
+      ? `The request could not be completed${code ? ` (code: ${code})` : ''} (HTTP ${status}).`
+      : `İstek tamamlanamadı${code ? ` (kod: ${code})` : ''} (HTTP ${status}).`;
   }
-
-  return `İstek başarısız oldu (HTTP ${status}).`;
+  return language === 'en' ? `The request failed (HTTP ${status}).` : `İstek başarısız oldu (HTTP ${status}).`;
 }
 
 async function readErrorPayload(response) {
@@ -147,7 +150,7 @@ async function request(path, { query, responseType, ...options } = {}) {
       throw cause;
     }
 
-    throw new ApiError('Sunucuya ulaşılamadı. Backend bağlantısını kontrol edin.', {
+    throw new ApiError(getLanguage() === 'en' ? 'The server could not be reached. Check the backend connection.' : 'Sunucuya ulaşılamadı. Backend bağlantısını kontrol edin.', {
       method,
       url,
       cause,
@@ -183,6 +186,14 @@ function segment(value) {
 }
 
 export const api = {
+  getGeneralSettings() {
+    return request('/settings/general');
+  },
+
+  updateGeneralSettings(payload) {
+    return jsonRequest('/settings/general', { method: 'PUT', body: payload });
+  },
+
   getPlatforms() {
     return request('/platforms');
   },
@@ -283,6 +294,18 @@ export const api = {
     return request('/credentials');
   },
 
+  socialAuthorizationUrl(provider) {
+    return buildUrl(`/integrations/${segment(provider)}/authorize`);
+  },
+
+  validateSocialConnection(provider) {
+    return request(`/integrations/${segment(provider)}/validate`, { method: 'POST' });
+  },
+
+  validateAiCredential(id) {
+    return request(`/credentials/${segment(id)}/validate`, { method: 'POST' });
+  },
+
   createCredential(payload) {
     return jsonRequest('/credentials', { method: 'POST', body: payload });
   },
@@ -312,3 +335,4 @@ export const api = {
     return request(`/credentials/${segment(id)}`, { method: 'DELETE' });
   },
 };
+import { getLanguage } from './i18n';

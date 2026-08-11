@@ -44,6 +44,18 @@ export const CONTENT_STATUS_META = {
     className: 'border-sky-200 bg-sky-50 text-sky-700',
     calendarClassName: 'border-sky-500 bg-sky-50 text-sky-700',
   },
+  PUBLISHING: {
+    label: 'Doğrulanıyor',
+    tone: 'amber',
+    className: 'border-amber-200 bg-amber-50 text-amber-700',
+    calendarClassName: 'border-amber-500 bg-amber-50 text-amber-700',
+  },
+  REVIEW_REQUIRED: {
+    label: 'İnceleme gerekli',
+    tone: 'rose',
+    className: 'border-rose-200 bg-rose-50 text-rose-700',
+    calendarClassName: 'border-rose-500 bg-rose-50 text-rose-700',
+  },
   PUBLISHED: {
     label: 'Yayınlandı',
     tone: 'emerald',
@@ -133,14 +145,14 @@ function asValidDate(value) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-export function formatDateTime(value) {
+export function formatDateTime(value, locale = getLocale()) {
   const date = asValidDate(value);
-  return date ? dateTimeFormatter.format(date) : '—';
+  return date ? new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(date) : '—';
 }
 
-export function formatDate(value) {
+export function formatDate(value, locale = getLocale()) {
   const date = asValidDate(value);
-  return date ? dateFormatter.format(date) : '—';
+  return date ? new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }).format(date) : '—';
 }
 
 export function toDateTimeLocal(value) {
@@ -193,3 +205,4 @@ export function truncate(value, length = 120) {
 
   return `${text.slice(0, Math.max(0, length - 1)).trimEnd()}…`;
 }
+import { getLocale } from './i18n';

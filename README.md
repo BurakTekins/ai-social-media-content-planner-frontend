@@ -1,6 +1,6 @@
-# AI Social Media Content Planner — Frontend
+# AI Social Media Content Planner Frontend
 
-React frontend for the AI Social Media Content Planner. It provides a user interface for generating content batches, managing drafts and media, scheduling publications, browsing the content calendar, and managing provider credentials.
+The React-based user interface for AI Social Media Content Planner. The project is intended to live in the `frontend/` directory of the backend repository.
 
 ## Technology Stack
 
@@ -9,25 +9,15 @@ React frontend for the AI Social Media Content Planner. It provides a user inter
 - Tailwind CSS 4
 - pnpm
 
-## Features
-
-- Create AI-assisted generation batches from links and uploaded documents
-- Browse batch progress and generation attempts
-- Edit, schedule, and manage social media content
-- View scheduled content in a calendar
-- Manage AI provider and social platform credentials
-- Select text, image, and video models
-- Work with the backend's mock or real provider modes
-
 ## Local Setup
 
-### Requirements
+From the backend project's root directory, open the frontend directory:
 
-- Node.js
-- pnpm
-- [AI Social Media Content Planner Backend](https://github.com/BurakTekins/ai-social-media-content-planner-backend)
+```bash
+cd frontend
+```
 
-Install dependencies:
+Install the dependencies:
 
 ```bash
 pnpm install
@@ -45,17 +35,22 @@ Start the development server:
 pnpm dev
 ```
 
-The application runs at `http://localhost:5173` and proxies `/api` requests to `http://localhost:8080` by default.
+The frontend runs at `http://localhost:5173` by default and proxies `/api` requests to the backend.
 
-## Configuration
+## Environment Variables
 
 ```properties
 VITE_API_BASE_URL=/api
 VITE_API_PROXY_TARGET=http://localhost:8080
 ```
 
-`VITE_API_BASE_URL` controls the API path used by the browser. `VITE_API_PROXY_TARGET` controls the backend target used by the Vite development proxy.
+- `VITE_API_BASE_URL`: The API URL or path used by the browser.
+- `VITE_API_PROXY_TARGET`: The backend URL used by the Vite development proxy.
 
-## Backend
+## Commands
 
-The REST API, PostgreSQL persistence, Flyway migrations, AI provider integrations, and publishing jobs are maintained in the [backend repository](https://github.com/BurakTekins/ai-social-media-content-planner-backend).
+```bash
+pnpm dev      # Start the development server
+pnpm build    # Create a production build
+pnpm preview  # Preview the production build locally
+```
