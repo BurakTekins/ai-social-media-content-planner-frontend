@@ -19,6 +19,7 @@ import {
   ErrorState,
   Field,
   Input,
+  LocalDateTimeInput,
   Modal,
   PageHeader,
   Pagination,
@@ -32,14 +33,13 @@ function MediaPreview({ content, media }) {
   const source = media.resourcePath
     ? api.mediaUrl(content.id, media.mediaType)
     : media.publicUrl;
-  const isMock = source?.startsWith('mock://');
+  const previewAvailable = source && /^(https?:|blob:|data:|\/)/.test(source);
 
-  if (!source || isMock) {
+  if (!previewAvailable) {
     return (
       <div className="flex aspect-video min-h-36 flex-col items-center justify-center rounded-xl bg-gradient-to-br from-slate-100 to-indigo-50 px-4 text-center">
         <span className="text-2xl">{media.mediaType === 'IMAGE' ? '▧' : '▷'}</span>
-        <p className="mt-2 text-xs font-bold text-slate-600">{isMock ? 'Mock medya üretildi' : 'Önizleme bulunmuyor'}</p>
-        {isMock && <p className="mt-1 max-w-xs break-all text-[10px] text-slate-400">{source}</p>}
+        <p className="mt-2 text-xs font-bold text-slate-600">Önizleme bulunmuyor</p>
       </div>
     );
   }
@@ -60,9 +60,14 @@ function ScheduleForm({ content, onSaved, notify }) {
 
   const submit = async (event) => {
     event.preventDefault();
+    const scheduledIso = toIsoFromLocal(scheduledAt);
+    if (!scheduledIso || new Date(scheduledIso) <= new Date()) {
+      notify('Geçerli ve gelecekte bir tarih ve saat girin.', 'error');
+      return;
+    }
     setBusy(true);
     try {
-      const updated = await api.scheduleContent(content.id, toIsoFromLocal(scheduledAt));
+      const updated = await api.scheduleContent(content.id, scheduledIso);
       notify(content.status === 'FAILED' ? 'İçerik yeniden yayın kuyruğuna alındı.' : 'Yayın zamanı kaydedildi.');
       onSaved(updated);
     } catch (error) {
@@ -81,7 +86,7 @@ function ScheduleForm({ content, onSaved, notify }) {
         </div>
       )}
       <Field label="Yayın tarihi ve saati" hint="Yerel saat diliminiz" required>
-        <Input type="datetime-local" required min={toDateTimeLocal(new Date().toISOString())} value={scheduledAt} onChange={(event) => setScheduledAt(event.target.value)} />
+        <LocalDateTimeInput required value={scheduledAt} onChange={setScheduledAt} />
       </Field>
       <div className="mt-6 flex justify-end"><Button type="submit" disabled={busy}>{busy ? 'Kaydediliyor…' : action}</Button></div>
     </form>
@@ -90,7 +95,7 @@ function ScheduleForm({ content, onSaved, notify }) {
 
 function Attempts({ attempts, loading }) {
   if (loading) return <Spinner label="Yayın denemeleri yükleniyor" />;
-  if (!attempts.length) return <EmptyState title="Yayın denemesi yok" description="İçerik yayın job'u tarafından işlendiğinde denemeler burada görünecek." />;
+  if (!attempts.length) return <EmptyState title="Yayın denemesi yok" description="İçerik yayınlama işlemi başladığında denemeler burada görünür." />;
   return (
     <div className="space-y-3">
       {attempts.map((attempt) => (
@@ -99,7 +104,6 @@ function Attempts({ attempts, loading }) {
             <StatusBadge label={attempt.success ? 'Başarılı' : 'Başarısız'} tone={attempt.success ? 'emerald' : 'rose'} />
             <span className="text-xs font-semibold text-slate-400">{formatDateTime(attempt.attemptedAt)}</span>
           </div>
-          {attempt.externalPostId && <p className="mt-3 break-all text-xs font-medium text-emerald-700">Dış gönderi ID: {attempt.externalPostId}</p>}
           {attempt.errorMessage && <p className="mt-3 text-sm leading-6 text-rose-700">{attempt.errorMessage}</p>}
         </div>
       ))}
@@ -261,9 +265,14 @@ function ContentDetail({ content, attempts, attemptsLoading, onChanged, onDelete
 }
 
 export default function ContentsPage({ notify }) {
+  const statusFromHash = () => {
+    const query = window.location.hash.split('?')[1] || '';
+    const status = new URLSearchParams(query).get('status') || '';
+    return CONTENT_STATUS_META[status] && status !== 'DEFAULT' ? status : '';
+  };
   const [platforms, setPlatforms] = useState([]);
   const [data, setData] = useState(null);
-  const [filters, setFilters] = useState({ status: '', platform: '', batchId: '', page: 0, size: 20 });
+  const [filters, setFilters] = useState({ status: statusFromHash(), platform: '', batchId: '', page: 0, size: 20 });
   const [batchInput, setBatchInput] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -277,6 +286,11 @@ export default function ContentsPage({ notify }) {
   const [scheduleTarget, setScheduleTarget] = useState(null);
 
   useEffect(() => { api.getPlatforms().then(setPlatforms).catch(() => {}); }, []);
+  useEffect(() => {
+    const applyHashFilter = () => setFilters((current) => ({ ...current, status: statusFromHash(), page: 0 }));
+    window.addEventListener('hashchange', applyHashFilter);
+    return () => window.removeEventListener('hashchange', applyHashFilter);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -316,13 +330,34 @@ export default function ContentsPage({ notify }) {
     }
   }, [notify]);
 
+  useEffect(() => {
+    const openContentFromHash = () => {
+      const query = window.location.hash.split('?')[1] || '';
+      const contentId = new URLSearchParams(query).get('contentId');
+      if (contentId) openDetail(contentId);
+    };
+    openContentFromHash();
+    window.addEventListener('hashchange', openContentFromHash);
+    return () => window.removeEventListener('hashchange', openContentFromHash);
+  }, [openDetail]);
+
+  const closeDetail = () => {
+    setSelectedId(null);
+    setContent(null);
+    const query = window.location.hash.split('?')[1] || '';
+    const params = new URLSearchParams(query);
+    params.delete('contentId');
+    const nextQuery = params.toString();
+    window.history.replaceState(null, '', `#/contents${nextQuery ? `?${nextQuery}` : ''}`);
+  };
+
   const setFilter = (name, value) => setFilters((current) => ({ ...current, [name]: value, page: name === 'page' ? value : 0 }));
 
   const applyBatchFilter = (event) => {
     event.preventDefault();
     const value = batchInput.trim();
     if (value && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
-      notify('Geçerli bir batch UUID girin.', 'error');
+      notify('Geçerli bir üretim kimliği girin.', 'error');
       return;
     }
     setFilter('batchId', value);
@@ -350,8 +385,8 @@ export default function ContentsPage({ notify }) {
   };
 
   const statusCounts = useMemo(() => {
-    const counts = { DRAFT: 0, SCHEDULED: 0, PUBLISHED: 0, FAILED: 0 };
-    data?.items?.forEach((item) => { counts[item.status] += 1; });
+    const counts = Object.fromEntries(Object.keys(CONTENT_STATUS_META).filter((key) => key !== 'DEFAULT').map((key) => [key, 0]));
+    data?.items?.forEach((item) => { counts[item.status] = (counts[item.status] || 0) + 1; });
     return counts;
   }, [data]);
 
@@ -359,10 +394,10 @@ export default function ContentsPage({ notify }) {
     <>
       <PageHeader eyebrow="Taslak yönetimi" title="İçerik kütüphanesi" description="Üretilen içerikleri düzenleyin, medyalarını yönetin ve yayın akışına alın." />
 
-      <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         {Object.entries(CONTENT_STATUS_META).filter(([key]) => key !== 'DEFAULT').map(([key, meta]) => (
           <button key={key} onClick={() => setFilter('status', filters.status === key ? '' : key)} className={`rounded-2xl border p-4 text-left transition ${filters.status === key ? 'border-indigo-300 bg-indigo-50' : 'border-slate-200 bg-white hover:border-slate-300'}`}>
-            <p className="text-xs font-bold text-slate-400">{meta.label}</p><p className="mt-2 text-2xl font-extrabold text-slate-900">{statusCounts[key]}</p><p className="mt-1 text-[10px] text-slate-400">Bu sayfadaki kayıt</p>
+            <p className="text-xs font-bold text-slate-400">{meta.label}</p><p className="mt-2 text-2xl font-extrabold text-slate-900">{statusCounts[key] ?? 0}</p><p className="mt-1 text-[10px] text-slate-400">Bu sayfadaki kayıt</p>
           </button>
         ))}
       </div>
@@ -372,7 +407,7 @@ export default function ContentsPage({ notify }) {
           <Select value={filters.status} onChange={(event) => setFilter('status', event.target.value)}><option value="">Tüm durumlar</option>{Object.entries(CONTENT_STATUS_META).filter(([key]) => key !== 'DEFAULT').map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</Select>
           <Select value={filters.platform} onChange={(event) => setFilter('platform', event.target.value)}><option value="">Tüm platformlar</option>{platforms.map((item) => <option key={item.platform} value={item.platform}>{PLATFORM_LABELS[item.platform] || item.platform}</option>)}</Select>
           <form className="flex gap-2" onSubmit={applyBatchFilter}>
-            <Input value={batchInput} onChange={(event) => setBatchInput(event.target.value)} placeholder="Batch UUID ile filtrele" />
+            <Input value={batchInput} onChange={(event) => setBatchInput(event.target.value)} placeholder="Üretim kimliğiyle filtrele" />
             <Button type="submit" variant="secondary" className="shrink-0">Uygula</Button>
           </form>
         </div>
@@ -380,7 +415,7 @@ export default function ContentsPage({ notify }) {
         <div className="p-5">
           {loading && <Spinner label="İçerikler yükleniyor" />}
           {!loading && error && <ErrorState error={error} onRetry={load} />}
-          {!loading && !error && !data?.items?.length && <EmptyState title="İçerik bulunamadı" description="Filtreleri temizleyin veya üretim ekranından yeni bir batch başlatın." action={<Button onClick={() => { window.location.hash = '#/batches'; }}>Üretime git</Button>} />}
+          {!loading && !error && !data?.items?.length && <EmptyState title="İçerik bulunamadı" description="Filtreleri temizleyin veya üretim ekranından yeni bir toplu üretim başlatın." action={<Button onClick={() => { window.location.hash = '#/batches'; }}>Üretime git</Button>} />}
           {!loading && !error && data?.items?.length > 0 && (
             <div className="grid gap-4 xl:grid-cols-2">
               {data.items.map((item) => {
@@ -401,19 +436,28 @@ export default function ContentsPage({ notify }) {
                     </button>
                     <div className="flex justify-end gap-2 border-t border-slate-100 px-4 py-3">
                       {item.status !== 'PUBLISHED' && <Button size="sm" variant={item.status === 'FAILED' ? 'danger' : 'soft'} onClick={() => setScheduleTarget(item)}>{item.status === 'FAILED' ? 'Yeniden dene' : item.status === 'SCHEDULED' ? 'Yeniden planla' : 'Planla'}</Button>}
-                      <Button size="sm" variant="ghost" onClick={() => openDetail(item.id)}>Detay</Button>
+                      <Button size="sm" variant="ghost" onClick={() => openDetail(item.id)}>Ayrıntılar</Button>
                     </div>
                   </article>
                 );
               })}
-              <div className="xl:col-span-2"><Pagination page={data.page} totalPages={data.totalPages} onChange={(page) => setFilter('page', page)} /></div>
+              <div className="xl:col-span-2">
+                <Pagination
+                  page={data.page}
+                  size={data.size}
+                  totalElements={data.totalElements}
+                  totalPages={data.totalPages}
+                  onChange={(page) => setFilter('page', page)}
+                  onSizeChange={(size) => setFilter('size', size)}
+                />
+              </div>
             </div>
           )}
         </div>
       </Card>
 
-      <Modal open={Boolean(selectedId)} title="İçerik detayı" description={content ? `Oluşturulma: ${formatDateTime(content.createdAt)}` : 'İçerik yükleniyor'} onClose={() => { setSelectedId(null); setContent(null); }} size="xl">
-        {detailLoading || !content ? <Spinner label="İçerik detayı yükleniyor" /> : <ContentDetail content={content} attempts={attempts} attemptsLoading={attemptsLoading} notify={notify} onChanged={changed} onDelete={() => setDeleteTarget(content)} />}
+      <Modal open={Boolean(selectedId)} title="İçerik ayrıntıları" description={content ? `Oluşturulma: ${formatDateTime(content.createdAt)}` : 'İçerik yükleniyor'} onClose={closeDetail} size="xl">
+        {detailLoading || !content ? <Spinner label="İçerik ayrıntıları yükleniyor" /> : <ContentDetail content={content} attempts={attempts} attemptsLoading={attemptsLoading} notify={notify} onChanged={changed} onDelete={() => setDeleteTarget(content)} />}
       </Modal>
 
       <Modal open={Boolean(scheduleTarget)} title={scheduleTarget?.status === 'FAILED' ? 'Yayınlamayı yeniden dene' : 'Yayın zamanı'} description={scheduleTarget ? `${PLATFORM_LABELS[scheduleTarget.platform]} · ${CONTENT_TYPE_LABELS[scheduleTarget.contentType]}` : ''} onClose={() => setScheduleTarget(null)} size="md">

@@ -29,6 +29,7 @@ const initialForm = {
   platform: '',
   contentType: '',
   requestedCount: 5,
+  generationStrategy: '',
   includeImage: false,
   includeVideo: false,
   textProvider: '',
@@ -38,6 +39,11 @@ const initialForm = {
   videoProvider: '',
   videoModel: '',
   links: '',
+};
+
+const GENERATION_STRATEGY_LABELS = {
+  SOURCE_BASED: 'Kaynak bazlı',
+  COMBINED: 'Birleşik',
 };
 
 function linksExist(value) {
@@ -116,8 +122,33 @@ function BatchForm({ platforms, models, onCreated, notify }) {
 
   const supportedTypes = platforms.find((item) => item.platform === form.platform)?.contentTypes || [];
   const byCapability = (capability) => models.filter((item) => item.capability === capability);
+  const linkCount = form.links.split('\n').filter((item) => item.trim()).length;
+  const sourceCount = linkCount + files.length;
+  const requestedCount = Number(form.requestedCount);
+  const automaticStrategy = sourceCount > 0 && sourceCount === requestedCount
+    ? 'SOURCE_BASED'
+    : 'COMBINED';
+  const sourceReuseWarning = form.generationStrategy === 'SOURCE_BASED'
+    && sourceCount > 0
+    && sourceCount < requestedCount;
 
   const setValue = (name, value) => setForm((current) => ({ ...current, [name]: value }));
+  const addFiles = (selectedFiles) => {
+    const selected = Array.from(selectedFiles);
+    setFiles((current) => {
+      const next = [...current];
+      selected.forEach((file) => {
+        const exists = next.some((item) => (
+          item.name === file.name
+          && item.size === file.size
+          && item.lastModified === file.lastModified
+        ));
+        if (!exists) next.push(file);
+      });
+      return next;
+    });
+  };
+  const removeFile = (index) => setFiles((current) => current.filter((_, itemIndex) => itemIndex !== index));
   const setModel = (prefix, provider, model) => setForm((current) => ({
     ...current,
     [`${prefix}Provider`]: provider,
@@ -158,6 +189,7 @@ function BatchForm({ platforms, models, onCreated, notify }) {
       textModel: { provider: form.textProvider, model: form.textModel },
       imageModel: form.includeImage ? { provider: form.imageProvider, model: form.imageModel } : null,
       videoModel: form.includeVideo ? { provider: form.videoProvider, model: form.videoModel } : null,
+      generationStrategy: form.generationStrategy || null,
       links,
     };
 
@@ -225,7 +257,7 @@ function BatchForm({ platforms, models, onCreated, notify }) {
         <p className="eyebrow">2 · Yapay zeka modelleri</p>
         {!models.length && (
           <p className="mt-3 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-700">
-            Model kataloğu boş döndü. Mock akışı için sağlayıcıyı seçip backend'in kabul edeceği model ID'sini elle girebilirsiniz.
+            Model kataloğu boş. Sağlayıcıyı seçip sunucunun kabul ettiği model kimliğini elle girebilirsiniz.
           </p>
         )}
         <div className="mt-4 space-y-5">
@@ -250,6 +282,32 @@ function BatchForm({ platforms, models, onCreated, notify }) {
 
       <div className="border-t border-slate-100 pt-7">
         <p className="eyebrow">3 · Kaynaklar</p>
+        <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50 p-4">
+          <Field label="Üretim stratejisi" hint={`${sourceCount} kaynak · ${requestedCount || 0} içerik`}>
+            <Select
+              value={form.generationStrategy}
+              onChange={(event) => setValue('generationStrategy', event.target.value)}
+            >
+              <option value="">
+                {sourceCount > 0 ? `Otomatik (${GENERATION_STRATEGY_LABELS[automaticStrategy]})` : 'Otomatik'}
+              </option>
+              <option value="SOURCE_BASED">Kaynak bazlı</option>
+              <option value="COMBINED">Birleşik</option>
+            </Select>
+          </Field>
+          <p className="mt-2 text-xs leading-5 text-slate-500">
+            {form.generationStrategy === 'SOURCE_BASED'
+              ? 'Her içerik bir birincil kaynağa atanır; diğer kaynaklar destekleyici bağlam olarak kullanılır.'
+              : form.generationStrategy === 'COMBINED'
+                ? 'Tüm kaynaklar ortak havuz olarak kullanılır; içerikler farklı açılarla üretilir.'
+                : 'Kaynak ve içerik sayıları eşitse kaynak bazlı, diğer durumlarda birleşik strateji seçilir.'}
+          </p>
+          {sourceReuseWarning && (
+            <p className="mt-2 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
+              Kaynak sayısı içerik sayısından az. Bazı kaynaklar sırayla birden fazla içerikte ana kaynak olarak kullanılacak.
+            </p>
+          )}
+        </div>
         <div className="mt-4 grid gap-4 lg:grid-cols-2">
           <Field label="Kaynak linkleri" hint="Her satıra bir link">
             <Textarea
@@ -258,19 +316,32 @@ function BatchForm({ platforms, models, onCreated, notify }) {
               placeholder={'https://ornek.com/yazi\nhttps://ornek.com/urun'}
             />
           </Field>
-          <Field label="Dökümanlar" hint="PDF, DOCX veya TXT">
-            <label className="flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 text-center transition hover:border-indigo-300 hover:bg-indigo-50/40">
+          <Field label="Dokümanlar" hint="PDF, DOCX veya TXT">
+            <label className="flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 text-center transition hover:border-indigo-300 hover:bg-indigo-50/40 dark:border-slate-700 dark:bg-slate-800/60 dark:hover:border-indigo-500 dark:hover:bg-indigo-950/30">
               <input
                 className="sr-only"
                 type="file"
                 multiple
                 accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
-                onChange={(event) => setFiles([...event.target.files])}
+                onChange={(event) => {
+                  addFiles(event.target.files);
+                  event.target.value = '';
+                }}
               />
-              <span className="text-sm font-bold text-slate-700">Dosya seçin</span>
-              <span className="mt-1 text-xs text-slate-400">Birden fazla dosya yükleyebilirsiniz</span>
+              <span className="text-sm font-bold text-slate-700 dark:text-slate-200">{files.length ? 'Başka dosya ekle' : 'Dosya seçin'}</span>
+              <span className="mt-1 text-xs text-slate-400">Bir veya birden fazla dosya seçebilirsiniz</span>
               {files.length > 0 && <span className="mt-3 rounded-full bg-indigo-100 px-3 py-1 text-xs font-bold text-indigo-700">{files.length} dosya seçildi</span>}
             </label>
+            {files.length > 0 && (
+              <ul className="mt-3 space-y-2">
+                {files.map((file, index) => (
+                  <li key={`${file.name}-${file.size}-${file.lastModified}`} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-2 text-xs dark:border-slate-700">
+                    <span className="min-w-0 truncate font-medium text-slate-600 dark:text-slate-300">{file.name}</span>
+                    <button type="button" onClick={() => removeFile(index)} className="shrink-0 font-bold text-rose-600 transition hover:text-rose-700 dark:text-rose-400 dark:hover:text-rose-300">Kaldır</button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </Field>
         </div>
       </div>
@@ -286,7 +357,7 @@ function BatchForm({ platforms, models, onCreated, notify }) {
 }
 
 function BatchDetail({ batch, loading, retryBusy, onRetry, onClose }) {
-  if (loading || !batch) return <Spinner label="Batch detayı yükleniyor" />;
+  if (loading || !batch) return <Spinner label="Üretim ayrıntıları yükleniyor" />;
   const meta = BATCH_STATUS_META[batch.status] || BATCH_STATUS_META.DEFAULT;
   const progress = batch.requestedCount ? (batch.completedCount / batch.requestedCount) * 100 : 0;
 
@@ -298,6 +369,18 @@ function BatchDetail({ batch, loading, retryBusy, onRetry, onClose }) {
         <div className="rounded-2xl bg-slate-50 p-4"><p className="text-xs font-semibold text-slate-400">Durum</p><div className="mt-1"><StatusBadge label={meta.label} tone={meta.tone} /></div></div>
       </div>
       <Progress value={progress} label={`${batch.completedCount} / ${batch.requestedCount} içerik hazır`} />
+      <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+        <p className="text-xs font-semibold text-slate-400">Üretim stratejisi</p>
+        <p className="mt-1 font-bold text-slate-800">
+          {GENERATION_STRATEGY_LABELS[batch.generationStrategy] || batch.generationStrategy || 'Belirtilmedi'}
+        </p>
+        {batch.strategySelectionReason && <p className="mt-1 text-xs leading-5 text-slate-500">{batch.strategySelectionReason}</p>}
+        {batch.strategyWarning && (
+          <p className="mt-3 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
+            {batch.strategyWarning}
+          </p>
+        )}
+      </div>
       {batch.status === 'FAILED' && batch.lastError && (
         <div className="rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm text-rose-700">
           <p className="font-bold">Son hata</p>
@@ -365,7 +448,6 @@ export default function BatchesPage({ notify }) {
   const [detailLoading, setDetailLoading] = useState(false);
   const [retryConfirmOpen, setRetryConfirmOpen] = useState(false);
   const [retryBusy, setRetryBusy] = useState(false);
-
   const loadMetadata = useCallback(async () => {
     setMetadataLoading(true);
     try {
@@ -428,7 +510,9 @@ export default function BatchesPage({ notify }) {
   useEffect(() => {
     if (!selectedId || selectedBatch?.status !== 'IN_PROGRESS') return undefined;
     const interval = window.setInterval(async () => {
-      try { setSelectedBatch(await api.getBatch(selectedId)); } catch { }
+      try {
+        setSelectedBatch(await api.getBatch(selectedId));
+      } catch { }
     }, 3000);
     return () => window.clearInterval(interval);
   }, [selectedId, selectedBatch?.status]);
@@ -458,7 +542,9 @@ export default function BatchesPage({ notify }) {
     setRetryBusy(true);
     try {
       const retried = await api.retryBatch(batchId);
-      if (retried && typeof retried === 'object') setSelectedBatch(retried);
+      if (retried && typeof retried === 'object') {
+        setSelectedBatch(retried);
+      }
       setRetryConfirmOpen(false);
       notify('Üretim tekrar başlatıldı.');
 
@@ -466,7 +552,7 @@ export default function BatchesPage({ notify }) {
         const detail = await api.getBatch(batchId);
         setSelectedBatch(detail);
       } catch (refreshError) {
-        notify(`Üretim başladı ancak detay yenilenemedi: ${refreshError.message}`, 'error');
+        notify(`Üretim başladı ancak ayrıntılar yenilenemedi: ${refreshError.message}`, 'error');
       }
       await loadBatches(true);
     } catch (retryError) {
@@ -481,7 +567,7 @@ export default function BatchesPage({ notify }) {
       <PageHeader
         eyebrow="Toplu üretim"
         title="İçerik üretim merkezi"
-        description="Kaynaklarınızı, platform formatını ve yapay zeka modellerini seçin; batch ilerlemesini tek ekrandan izleyin."
+        description="Kaynakları, yayın biçimini ve yapay zekâ modellerini seçin; üretim sürecini tek ekrandan izleyin."
         action={<Button size="lg" onClick={() => setCreateOpen(true)}>＋ Yeni üretim</Button>}
       />
 
@@ -489,7 +575,7 @@ export default function BatchesPage({ notify }) {
 
       <Card className="overflow-hidden">
         <div className="flex flex-col gap-4 border-b border-slate-100 p-5 sm:flex-row sm:items-center sm:justify-between">
-          <div><h2 className="font-bold text-slate-900">Üretim geçmişi</h2><p className="mt-1 text-xs text-slate-400">Devam eden batch'ler otomatik yenilenir.</p></div>
+          <div><h2 className="font-bold text-slate-900">Üretim geçmişi</h2><p className="mt-1 text-xs text-slate-400">Devam eden üretimler otomatik yenilenir.</p></div>
           <div className="grid gap-2 sm:grid-cols-3">
             <Select value={filters.status} onChange={(event) => setFilter('status', event.target.value)} className="min-w-36">
               <option value="">Tüm durumlar</option>
@@ -510,7 +596,7 @@ export default function BatchesPage({ notify }) {
           {loading && <Spinner label="Üretimler yükleniyor" />}
           {!loading && error && <ErrorState error={error} onRetry={() => loadBatches()} />}
           {!loading && !error && !data?.items?.length && (
-            <EmptyState title="Henüz üretim yok" description="İlk toplu içerik üretiminizi başlatarak batch ilerlemesini burada izleyin." action={<Button onClick={() => setCreateOpen(true)}>Yeni üretim</Button>} />
+            <EmptyState title="Henüz üretim yok" description="İlk toplu içerik üretiminizi başlatın; ilerlemeyi buradan takip edin." action={<Button onClick={() => setCreateOpen(true)}>Yeni üretim</Button>} />
           )}
           {!loading && !error && data?.items?.length > 0 && (
             <div className="space-y-3">
@@ -534,7 +620,7 @@ export default function BatchesPage({ notify }) {
                       {!batch.includeImage && !batch.includeVideo && <span>Yalnızca metin</span>}
                     </div>
                     <Progress value={progress} label={`${batch.completedCount} / ${batch.requestedCount} hazır`} />
-                    <span className="text-right text-xs font-bold text-indigo-600">Detayı görüntüle →</span>
+                    <span className="text-right text-xs font-bold text-indigo-600">Ayrıntıları görüntüle →</span>
                   </button>
                 );
               })}
@@ -554,7 +640,7 @@ export default function BatchesPage({ notify }) {
         )}
       </Modal>
 
-      <Modal open={Boolean(selectedId)} title="Üretim detayı" description={selectedBatch ? `Batch ${selectedBatch.id}` : 'Batch bilgileri'} onClose={closeDetail} size="lg">
+      <Modal open={Boolean(selectedId)} title="Üretim ayrıntıları" description={selectedBatch ? `Üretim kimliği: ${selectedBatch.id}` : 'Üretim bilgileri'} onClose={closeDetail} size="lg">
         <BatchDetail
           batch={selectedBatch}
           loading={detailLoading}
@@ -567,7 +653,7 @@ export default function BatchesPage({ notify }) {
       <ConfirmDialog
         open={retryConfirmOpen}
         title="Üretimi tekrar dene"
-        description="Yalnızca eksik içerikler üretilecek; tamamlanan içerikler, alınmış AI çıktıları ve hazırlanmış kaynaklar korunacak. Provider yanıtı uygulamaya hiç ulaşmadıysa yeni çağrı tekrar ücret doğurabilir. Devam edilsin mi?"
+        description="Yalnızca eksik içerikler üretilecek; tamamlanan içerikler, alınmış yapay zekâ çıktıları ve hazırlanmış kaynaklar korunacak. Sağlayıcının yanıtı uygulamaya hiç ulaşmadıysa yeni istek yeniden ücretlendirilebilir. Devam edilsin mi?"
         confirmLabel="Tekrar dene"
         busy={retryBusy}
         onConfirm={handleRetry}
