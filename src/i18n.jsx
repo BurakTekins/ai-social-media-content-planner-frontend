@@ -3,6 +3,41 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 const STORAGE_KEY = 'social-plan-language';
 const I18nContext = createContext(null);
 
+export const VIDEO_GENERATION_COPY = {
+  durationLabel: { tr: 'Desteklenen video süresi', en: 'Supported video duration' },
+  durationHint: { tr: 'Seçilen modele göre', en: 'Based on the selected model' },
+  durationPlaceholder: { tr: 'Video süresi seçin', en: 'Select video duration' },
+  durationUnit: { tr: 'saniye', en: 'seconds' },
+  invalidDuration: { tr: 'Seçilen modelin desteklediği bir video süresi seçin.', en: 'Select a video duration supported by the selected model.' },
+  instagramPostVideoHint: { tr: 'Instagram gönderilerinde video kullanılamaz. Video üretmek için Reels formatını seçin.', en: 'Video is not available for Instagram posts. Select the Reels format to generate video.' },
+};
+
+export const GENERATION_ATTEMPT_COPY = {
+  sectionTitle: { tr: 'Video üretim süreci', en: 'Video generation progress' },
+  loading: { tr: 'Video üretim durumları yükleniyor', en: 'Loading video generation statuses' },
+  contentSlot: { tr: 'İçerik', en: 'Content' },
+  nextRetry: { tr: 'Sonraki indirme denemesi', en: 'Next download retry' },
+  retryCount: { tr: 'İndirme denemesi', en: 'Download attempts' },
+  automaticRetry: { tr: 'İndirme otomatik olarak yeniden denenecek.', en: 'Download will be retried automatically.' },
+  consentWarning: { tr: 'Üretilen video artık provider üzerinde bulunmuyor. Yeniden üretim yeni bir ücret oluşturabilir.', en: 'The generated video is no longer available from the provider. Regeneration may create an additional charge.' },
+  approve: { tr: 'Yeniden üretimi onayla', en: 'Approve regeneration' },
+  approving: { tr: 'Onaylanıyor…', en: 'Approving…' },
+  approved: { tr: 'Video yeniden üretimi onaylandı.', en: 'Video regeneration was approved.' },
+  statuses: {
+    STARTED: { label: { tr: 'Video üretimi başlatılıyor', en: 'Starting video generation' }, description: { tr: 'Video üretim isteği hazırlanıyor.', en: 'The video generation request is being prepared.' } },
+    SUBMITTED: { label: { tr: 'Video isteği gönderildi', en: 'Video request submitted' }, description: { tr: 'Provider üzerinde video üretim görevi oluşturuldu.', en: 'The video generation task was created at the provider.' } },
+    PROCESSING: { label: { tr: 'Video üretiliyor', en: 'Generating video' }, description: { tr: 'Video provider tarafından üretiliyor veya sonuç yeniden sorgulanıyor.', en: 'The provider is generating the video or the result is being checked again.' } },
+    PROVIDER_SUCCEEDED: { label: { tr: 'Video üretildi', en: 'Video generated' }, description: { tr: 'Provider videoyu üretti; indirme işlemi bekleniyor.', en: 'The provider generated the video; download is pending.' } },
+    DOWNLOAD_FAILED: { label: { tr: 'İndirme yeniden denenecek', en: 'Download retry scheduled' }, description: { tr: 'İndirme veya depolama tamamlanamadı. Backend otomatik olarak yeniden deneyecek.', en: 'Download or storage did not complete. The backend will retry automatically.' } },
+    DOWNLOADED: { label: { tr: 'Video indiriliyor', en: 'Downloading video' }, description: { tr: 'Video depolamaya indirildi; kayıt tamamlanıyor.', en: 'The video was downloaded to storage; the record is being finalized.' } },
+    SUCCEEDED: { label: { tr: 'Video tamamlandı', en: 'Video completed' }, description: { tr: 'Video başarıyla üretildi ve kaydedildi.', en: 'The video was generated and saved successfully.' } },
+    AWAITING_REGENERATION_CONSENT: { label: { tr: 'Yeniden üretim onayı gerekiyor', en: 'Regeneration approval required' }, description: { tr: 'Provider artifact süresi dolduğu için kullanıcı onayı bekleniyor.', en: 'User approval is required because the provider artifact expired.' } },
+    REGENERATION_APPROVED: { label: { tr: 'Yeniden üretim onaylandı', en: 'Regeneration approved' }, description: { tr: 'Yeni ücretli video üretimi onaylandı.', en: 'A new paid video generation was approved.' } },
+    FAILED: { label: { tr: 'Video üretimi başarısız', en: 'Video generation failed' }, description: { tr: 'Video üretimi kalıcı olarak başarısız oldu.', en: 'Video generation failed permanently.' } },
+    UNKNOWN: { label: { tr: 'Video sonucu belirsiz', en: 'Video result unknown' }, description: { tr: 'Provider sonucunun oluşup oluşmadığı doğrulanamadı.', en: 'It could not be confirmed whether the provider produced a result.' } },
+  },
+};
+
 const EN = {
   'Üretim': 'Generation', 'İçerikler': 'Contents', 'İçerik': 'Content', 'Takvim': 'Calendar', 'Bağlantılar': 'Connections', 'Bağlantı': 'Connection', 'Entegrasyonlar': 'Integrations', 'Entegrasyon': 'Integrations', 'Ayarlar': 'Settings',
   'Sağlayıcı': 'Provider', 'Sağlayıcı seçin': 'Select provider', 'Model seçin': 'Select model', 'Model ID': 'Model ID', 'Metin modeli': 'Text model', 'Görsel modeli': 'Image model', 'Video modeli': 'Video model', 'Platform': 'Platform', 'Format': 'Format', 'Durum': 'Status',

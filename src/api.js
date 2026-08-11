@@ -211,6 +211,16 @@ export const api = {
     return request(`/generation-batches/${segment(id)}`);
   },
 
+  listGenerationAttempts(batchId) {
+    return request(`/generation-batches/${segment(batchId)}/attempts`);
+  },
+
+  approveGenerationRegeneration(batchId, attemptId) {
+    return request(`/generation-batches/${segment(batchId)}/attempts/${segment(attemptId)}/regeneration-consent`, {
+      method: 'POST',
+    });
+  },
+
   createBatch(payload, files = []) {
     const formData = new FormData();
     formData.append(
