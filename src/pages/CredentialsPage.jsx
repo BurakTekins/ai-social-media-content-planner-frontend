@@ -56,6 +56,102 @@ const oauthErrorMessages = {
   unknown_error: 'Hesap bağlantısı tamamlanamadı.',
 };
 
+function ProviderLogo({ provider, size = 'md' }) {
+  const sizeClass = size === 'sm' ? 'h-10 w-10' : 'h-11 w-11';
+  const iconClass = size === 'sm' ? 'h-6 w-6' : 'h-7 w-7';
+  const common = `${sizeClass} grid shrink-0 place-items-center overflow-hidden rounded-xl border shadow-sm`;
+
+  if (provider === 'instagram') {
+    return (
+      <span className={`${common} border-fuchsia-400/30 bg-gradient-to-br from-violet-600 via-fuchsia-500 to-amber-400 text-white`} aria-hidden="true">
+        <svg className={iconClass} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <rect x="3.5" y="3.5" width="17" height="17" rx="5" />
+          <circle cx="12" cy="12" r="4" />
+          <circle cx="17.5" cy="6.7" r="1" fill="currentColor" stroke="none" />
+        </svg>
+      </span>
+    );
+  }
+
+  if (provider === 'linkedin') {
+    return (
+      <span className={`${common} border-[#0a66c2]/30 bg-[#0a66c2] text-white`} aria-hidden="true">
+        <svg className={iconClass} viewBox="0 0 24 24" fill="currentColor">
+          <circle cx="6.2" cy="6.1" r="2" />
+          <path d="M4.4 9h3.7v10.6H4.4V9Zm5.8 0h3.5v1.5h.1c.5-.9 1.7-1.9 3.5-1.9 3.7 0 4.4 2.4 4.4 5.6v5.4H18v-4.8c0-1.2 0-2.7-1.7-2.7s-2 1.3-2 2.6v4.9h-3.7V9h-.4Z" />
+        </svg>
+      </span>
+    );
+  }
+
+  if (provider === 'twitter') {
+    return (
+      <span className={`${common} border-slate-300 bg-slate-950 text-white dark:border-slate-700 dark:bg-white dark:text-slate-950`} aria-hidden="true">
+        <svg className={iconClass} viewBox="0 0 24 24" fill="currentColor">
+          <path d="M4.3 3.8h4.9l3.8 5.1 4.5-5.1h2.1l-5.7 6.6 6.2 9.8h-4.9l-4.1-5.6-4.9 5.6H4.1l6-7L4.3 3.8Zm3.8 1.7 8 13h1.8l-8-13H8.1Z" />
+        </svg>
+      </span>
+    );
+  }
+
+  if (provider === 'gemini') {
+    return (
+      <span className={`${common} border-blue-300/50 bg-gradient-to-br from-blue-50 to-violet-100 text-blue-600 dark:border-blue-800 dark:from-blue-950 dark:to-violet-950 dark:text-blue-300`} aria-hidden="true">
+        <svg className={iconClass} viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 2.5C12.8 8.2 15.8 11.2 21.5 12 15.8 12.8 12.8 15.8 12 21.5 11.2 15.8 8.2 12.8 2.5 12 8.2 11.2 11.2 8.2 12 2.5Z" />
+        </svg>
+      </span>
+    );
+  }
+
+  if (provider === 'openai') {
+    return (
+      <span className={`${common} border-slate-300 bg-white text-slate-950 dark:border-slate-700 dark:bg-slate-950 dark:text-white`} aria-hidden="true">
+        <svg className={iconClass} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round">
+          <path d="M12 3.2a4.2 4.2 0 0 1 7.4 3.9 4.2 4.2 0 0 1 .4 7.7 4.2 4.2 0 0 1-6.9 4.4 4.2 4.2 0 0 1-7.3-3.9 4.2 4.2 0 0 1-.4-7.7A4.2 4.2 0 0 1 12 3.2Z" />
+          <path d="m8.2 6.1 7.7 4.4v7.1M5.5 9.4l7.7 4.4 6.1-3.6M5.6 14.7l7.6-4.4V3.4" />
+        </svg>
+      </span>
+    );
+  }
+
+  if (provider === 'anthropic') {
+    return (
+      <span className={`${common} border-stone-300 bg-[#d8c7a7] text-[#181714] dark:border-stone-600 dark:bg-[#b8a486]`} aria-hidden="true">
+        <svg className={iconClass} viewBox="0 0 24 24" fill="currentColor">
+          <path d="M9.4 4h3.7l6.1 16h-3.7l-1.2-3.4H8.1L6.9 20H3.2L9.4 4Zm-.2 9.5h4l-2-5.8-2 5.8ZM17.4 4h3.4v16h-3.4V4Z" />
+        </svg>
+      </span>
+    );
+  }
+
+  if (provider === 'deepseek') {
+    return (
+      <span className={`${common} border-blue-300 bg-blue-600 text-white dark:border-blue-700 dark:bg-blue-600`} aria-hidden="true">
+        <svg className={iconClass} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 13.3c2.2-4.6 6.2-7 10.7-6.1 2.7.5 4.7 2.3 6.3 4.6-1.8 4.3-5.2 7.1-9.5 7.1-3.3 0-5.9-1.8-7.5-5.6Z" />
+          <path d="M13.9 7.2c1-1.7 2.5-2.7 4.5-2.8-.1 1.9-.9 3.4-2.5 4.5M7.2 14.2c1.6 1.4 4.1 1.7 6 .7" />
+          <circle cx="15.7" cy="11.7" r=".9" fill="currentColor" stroke="none" />
+        </svg>
+      </span>
+    );
+  }
+
+  if (provider === 'qwen') {
+    return (
+      <span className={`${common} border-violet-300 bg-gradient-to-br from-violet-600 to-indigo-700 text-white dark:border-violet-700`} aria-hidden="true">
+        <svg className={iconClass} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 3.2 18.8 7v7.6L12 18.5l-6.8-3.9V7L12 3.2Z" />
+          <path d="m8.5 9 3.5-2 3.5 2v4L12 15l-3.5-2V9Z" />
+          <path d="m15.5 15.8 2.5 2.5" />
+        </svg>
+      </span>
+    );
+  }
+
+  return <span className={`${common} border-slate-200 bg-slate-50 text-sm font-bold uppercase text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200`} aria-hidden="true">{provider.slice(0, 2)}</span>;
+}
+
 function oauthErrorMessage(errorCode) {
   return oauthErrorMessages[errorCode] || oauthErrorMessages.unknown_error;
 }
@@ -90,8 +186,8 @@ function CredentialForm({ notify, onSaved }) {
   };
 
   return (
-    <form onSubmit={submit} className="space-y-5">
-      <div className="grid gap-4 sm:grid-cols-2">
+    <form onSubmit={submit} className="space-y-6">
+      <div className="grid gap-5 sm:grid-cols-2">
         <Field label="Kayıt türü" required>
           <select className="control" value={form.credentialType} onChange={(event) => changeType(event.target.value)}>
             <option value="AI_PROVIDER">Yapay zeka sağlayıcısı</option>
@@ -106,7 +202,7 @@ function CredentialForm({ notify, onSaved }) {
       <Field label="Hesap tanımlayıcısı" hint={accountRequired ? 'Bu sağlayıcı için zorunlu' : 'Opsiyonel'} required={accountRequired}>
         <Input value={form.accountIdentifier} required={accountRequired} onChange={(event) => setValue('accountIdentifier', event.target.value)} placeholder={form.providerName === 'instagram' ? 'Instagram user ID' : form.providerName === 'linkedin' ? 'LinkedIn owner URN' : 'Hesap veya tenant tanımı'} />
       </Field>
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-5 sm:grid-cols-2">
         <Field label="API anahtarı / erişim anahtarı" hint="Kaydettikten sonra gösterilmez" required>
           <Input type="password" autoComplete="new-password" required value={form.accessToken} onChange={(event) => setValue('accessToken', event.target.value)} />
         </Field>
@@ -115,7 +211,7 @@ function CredentialForm({ notify, onSaved }) {
         </Field>
       </div>
       <Field label="Geçerlilik sonu" hint="Opsiyonel"><LocalDateTimeInput value={form.expiresAt} onChange={(value) => setValue('expiresAt', value)} /></Field>
-      <div className="flex justify-end"><Button type="submit" disabled={busy}>{busy ? 'Kaydediliyor…' : 'API anahtarı ekle'}</Button></div>
+      <div className="flex justify-end border-t border-slate-100 pt-5 dark:border-slate-800"><Button type="submit" disabled={busy}>{busy ? 'Kaydediliyor…' : 'API anahtarı ekle'}</Button></div>
     </form>
   );
 }
@@ -145,12 +241,12 @@ function RotateForm({ credential, notify, onSaved }) {
   };
 
   return (
-    <form onSubmit={submit} className="space-y-4">
+    <form onSubmit={submit} className="space-y-5">
       <Field label="Yeni API anahtarı / erişim anahtarı" required><Input type="password" autoComplete="new-password" required value={accessToken} onChange={(event) => setAccessToken(event.target.value)} /></Field>
       <Field label="Yeni yenileme anahtarı" hint="Boş bırakılırsa kaldırılır"><Input type="password" autoComplete="new-password" value={refreshToken} onChange={(event) => setRefreshToken(event.target.value)} /></Field>
       <Field label="Yeni geçerlilik sonu" hint="Opsiyonel"><LocalDateTimeInput value={expiresAt} onChange={setExpiresAt} /></Field>
-      <p className="rounded-xl bg-slate-50 p-3 text-xs leading-5 text-slate-500">Mevcut gizli değerler sunucu yanıtında yer almadığı için burada görüntülenemez.</p>
-      <div className="flex justify-end"><Button type="submit" disabled={busy}>{busy ? 'Güncelleniyor…' : 'Erişim bilgilerini güncelle'}</Button></div>
+      <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-500 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-400">Mevcut gizli değerler sunucu yanıtında yer almadığı için burada görüntülenemez.</p>
+      <div className="flex justify-end border-t border-slate-100 pt-5 dark:border-slate-800"><Button type="submit" disabled={busy}>{busy ? 'Güncelleniyor…' : 'Erişim bilgilerini güncelle'}</Button></div>
     </form>
   );
 }
@@ -172,7 +268,7 @@ function AccountForm({ credential, notify, onSaved }) {
       setBusy(false);
     }
   };
-  return <form onSubmit={submit}><Field label="Hesap tanımlayıcısı" required={required}><Input required={required} value={value} onChange={(event) => setValue(event.target.value)} /></Field><div className="mt-6 flex justify-end"><Button type="submit" disabled={busy}>{busy ? 'Kaydediliyor…' : 'Kaydet'}</Button></div></form>;
+  return <form onSubmit={submit}><Field label="Hesap tanımlayıcısı" required={required}><Input required={required} value={value} onChange={(event) => setValue(event.target.value)} /></Field><div className="mt-6 flex justify-end border-t border-slate-100 pt-5 dark:border-slate-800"><Button type="submit" disabled={busy}>{busy ? 'Kaydediliyor…' : 'Kaydet'}</Button></div></form>;
 }
 
 export default function CredentialsPage({ notify }) {
@@ -317,21 +413,20 @@ export default function CredentialsPage({ notify }) {
     <>
       <PageHeader eyebrow="API ve platform erişimi" title="Hesaplar ve API Anahtarları" description="Yapay zekâ servislerinin API anahtarlarını ve sosyal medya hesap yetkilerini tek yerden yönetin." action={<Button size="lg" onClick={() => setCreateOpen(true)}>＋ API anahtarı ekle</Button>} />
 
-      <div className="mb-5 rounded-2xl border border-amber-100 bg-amber-50/70 p-4 text-sm leading-6 text-amber-800">
-        <strong>Güvenlik:</strong> API anahtarları ve erişim belirteçleri kaydedildikten sonra arayüzde gösterilmez. Burada yalnızca bağlantı ve doğrulama durumunu görürsünüz.
-      </div>
-
       {!loading && !error && unconnectedOauthProviders.length > 0 && (
-        <div className="mb-5 grid gap-4 xl:grid-cols-3">
+        <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {unconnectedOauthProviders.map((provider) => (
-            <Card key={provider.key} className="p-5">
-              <p className="eyebrow">OAuth 2.0</p>
-              <h2 className="mt-1 text-lg font-extrabold text-slate-900">{provider.title}</h2>
-              <p className="mt-2 min-h-10 text-sm text-slate-500">
+            <Card key={provider.key} className="flex min-h-52 flex-col p-5 transition hover:border-slate-300 hover:shadow-sm dark:hover:border-slate-700">
+              <div className="flex items-start justify-between gap-3">
+                <ProviderLogo provider={provider.key} size="sm" />
+                <span className="rounded-full border border-slate-200 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500 dark:border-slate-700 dark:text-slate-400">OAuth 2.0</span>
+              </div>
+              <h2 className="mt-4 text-base font-bold text-slate-950 dark:text-white">{provider.title}</h2>
+              <p className="mt-1.5 flex-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
                 Platformun izin ekranına yönlendirilirsiniz. Erişim bilgileri tarayıcıda gösterilmez.
               </p>
-              <div className="mt-4 flex flex-wrap gap-2">
-                <Button onClick={() => connectSocial(provider)}>Hesabı bağla</Button>
+              <div className="mt-5 flex">
+                <Button className="w-full sm:w-auto" onClick={() => connectSocial(provider)}>Hesabı bağla</Button>
               </div>
             </Card>
           ))}
@@ -340,15 +435,15 @@ export default function CredentialsPage({ notify }) {
 
       {loading && <Card><Spinner label="API anahtarları ve hesaplar yükleniyor" /></Card>}
       {!loading && error && <ErrorState error={error} onRetry={load} />}
-      {!loading && !error && !items.length && <Card className="p-5"><EmptyState title="Henüz API anahtarı veya bağlı hesap yok" description="Yapay zekâ üretimi için bir API anahtarı ekleyebilir veya yayınlama için sosyal medya hesabınızı bağlayabilirsiniz." action={<Button onClick={() => setCreateOpen(true)}>İlk API anahtarını ekle</Button>} /></Card>}
+      {!loading && !error && !items.length && <Card className="p-4 sm:p-5"><EmptyState title="Henüz API anahtarı veya bağlı hesap yok" description="Yapay zekâ üretimi için bir API anahtarı ekleyebilir veya yayınlama için sosyal medya hesabınızı bağlayabilirsiniz." action={<Button onClick={() => setCreateOpen(true)}>İlk API anahtarını ekle</Button>} /></Card>}
 
       {!loading && !error && items.length > 0 && (
-        <div className="grid gap-5 xl:grid-cols-2">
+        <div className="grid items-start gap-6 xl:grid-cols-2">
           {Object.entries(grouped).map(([type, credentials]) => (
             <Card key={type} className="overflow-hidden">
-              <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4"><div><p className="eyebrow">{type === 'AI_PROVIDER' ? 'Üretim' : 'Yayınlama'}</p><h2 className="mt-1 font-bold text-slate-900">{CREDENTIAL_TYPE_LABELS[type]}</h2></div><span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-extrabold text-slate-600">{credentials.length}</span></div>
-              <div className="divide-y divide-slate-100">
-                {!credentials.length && <div className="p-5 text-sm text-slate-400">Bu grupta kayıt yok.</div>}
+              <div className="flex items-center justify-between border-b border-slate-200/80 bg-slate-50/50 px-5 py-4 dark:border-slate-800 dark:bg-slate-900/30"><div><p className="eyebrow">{type === 'AI_PROVIDER' ? 'Üretim' : 'Yayınlama'}</p><h2 className="mt-1 font-bold text-slate-950 dark:text-white">{CREDENTIAL_TYPE_LABELS[type]}</h2></div><span className="grid h-8 min-w-8 place-items-center rounded-lg border border-slate-200 bg-white px-2 text-xs font-bold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">{credentials.length}</span></div>
+              <div className="divide-y divide-slate-200/80 dark:divide-slate-800">
+                {!credentials.length && <div className="p-6 text-center text-sm text-slate-500 dark:text-slate-400">Bu grupta kayıt yok.</div>}
                 {credentials.map((credential) => {
                   const oauthProvider = oauthProviders.find((provider) => provider.key === credential.providerName);
                   const oauthValidationBusy = oauthProvider && oauthBusy === oauthProvider.key;
@@ -370,17 +465,17 @@ export default function CredentialsPage({ notify }) {
                       ? 'emerald'
                       : 'slate';
                   return (
-                    <article key={credential.id} className="p-5">
+                    <article key={credential.id} className="p-5 transition-colors hover:bg-slate-50/70 dark:hover:bg-slate-900/30">
                       <div className="flex items-start justify-between gap-3">
-                        <div className="flex min-w-0 items-center gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-slate-100 text-base font-extrabold uppercase text-slate-600">{credential.providerName.slice(0, 2)}</span><div className="min-w-0"><h3 className="truncate font-bold text-slate-900">{providerLabels[credential.providerName] || credential.providerName}</h3><p className="mt-1 truncate text-xs text-slate-400">{credential.accountIdentifier || 'Hesap tanımlayıcısı yok'}</p></div></div>
+                        <div className="flex min-w-0 items-center gap-3"><ProviderLogo provider={credential.providerName} /><div className="min-w-0"><h3 className="truncate font-semibold text-slate-950 dark:text-white">{providerLabels[credential.providerName] || credential.providerName}</h3><p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{credential.accountIdentifier || 'Hesap tanımlayıcısı yok'}</p></div></div>
                         <StatusBadge label={statusLabel} tone={statusTone} />
                       </div>
-                      <div className="mt-4 grid grid-cols-2 gap-2 rounded-xl bg-slate-50 p-3 text-xs">
-                        <div><p className="font-semibold text-slate-400">Yenileme anahtarı</p><p className="mt-1 font-bold text-slate-700">{credential.hasRefreshToken ? 'Kayıtlı' : 'Yok'}</p></div>
-                        <div><p className="font-semibold text-slate-400">Geçerlilik</p><p className="mt-1 font-bold text-slate-700">{credential.expiresAt ? formatDateTime(credential.expiresAt) : 'Süresiz'}</p></div>
+                      <div className="mt-4 grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 text-xs dark:border-slate-800 dark:bg-slate-800 sm:grid-cols-2">
+                        <div className="bg-slate-50 px-3 py-2.5 dark:bg-slate-900/70"><p className="font-medium text-slate-500 dark:text-slate-400">Yenileme anahtarı</p><p className="mt-1 font-semibold text-slate-800 dark:text-slate-200">{credential.hasRefreshToken ? 'Kayıtlı' : 'Yok'}</p></div>
+                        <div className="bg-slate-50 px-3 py-2.5 dark:bg-slate-900/70"><p className="font-medium text-slate-500 dark:text-slate-400">Geçerlilik</p><p className="mt-1 font-semibold text-slate-800 dark:text-slate-200">{credential.expiresAt ? formatDateTime(credential.expiresAt) : 'Süresiz'}</p></div>
                       </div>
-                      {credential.validationError && <p className="mt-3 rounded-xl bg-rose-50 p-3 text-xs leading-5 text-rose-700">{credential.validationError}</p>}
-                      <div className="mt-4 flex flex-wrap justify-end gap-2">
+                      {credential.validationError && <p className="mt-3 rounded-lg border border-rose-100 bg-rose-50 p-3 text-xs leading-5 text-rose-700 dark:border-rose-900 dark:bg-rose-950/60 dark:text-rose-300">{credential.validationError}</p>}
+                      <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-100 pt-4 dark:border-slate-800 sm:justify-end">
                         {credential.credentialType === 'AI_PROVIDER' && (
                           <Button
                             variant={validationState === 'success' ? 'soft' : validationState === 'error' ? 'danger' : 'secondary'}

@@ -40,6 +40,30 @@ const routes = {
   },
 };
 
+const FAILED_ALERTS_STORAGE_KEY = 'social-plan-seen-failed-alerts';
+
+function loadSeenFailedAlerts() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(FAILED_ALERTS_STORAGE_KEY) || '{}');
+    return stored && typeof stored === 'object' && !Array.isArray(stored)
+      ? new Map(Object.entries(stored))
+      : new Map();
+  } catch {
+    return new Map();
+  }
+}
+
+function saveSeenFailedAlerts(seenAlerts) {
+  try {
+    const recentEntries = [...seenAlerts.entries()].slice(-500);
+    localStorage.setItem(FAILED_ALERTS_STORAGE_KEY, JSON.stringify(Object.fromEntries(recentEntries)));
+  } catch {}
+}
+
+function failedAlertVersion(item) {
+  return String(item.updatedAt || item.id);
+}
+
 function NavIcon({ name }) {
   const paths = {
     sparkles: <><path d="m12 3-1.1 3.1a3 3 0 0 1-1.8 1.8L6 9l3.1 1.1a3 3 0 0 1 1.8 1.8L12 15l1.1-3.1a3 3 0 0 1 1.8-1.8L18 9l-3.1-1.1a3 3 0 0 1-1.8-1.8L12 3Z"/><path d="m5 15-.5 1.5L3 17l1.5.5L5 19l.5-1.5L7 17l-1.5-.5L5 15Z"/></>,
@@ -63,12 +87,12 @@ function ThemeToggle({ theme, onToggle, compact = false }) {
   return (
     <button
       type="button"
-      className={`inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-slate-600 dark:hover:bg-slate-800 dark:hover:text-white ${compact ? 'h-9 w-9' : 'min-h-10 w-full px-3 text-xs'}`}
+      className={`inline-flex items-center justify-center gap-2 rounded-[10px] border border-slate-200 bg-white font-semibold text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-slate-600 dark:hover:bg-slate-800 dark:hover:text-white ${compact ? 'h-9 w-9' : 'min-h-10 w-full px-3 text-xs'}`}
       onClick={onToggle}
       aria-label={dark ? t('Açık moda geç', 'Switch to light mode') : t('Karanlık moda geç', 'Switch to dark mode')}
       aria-pressed={dark}
     >
-      <span aria-hidden="true">{dark ? '☀' : '☾'}</span>
+      <span className="text-[15px] leading-none" aria-hidden="true">{dark ? '☀' : '☾'}</span>
       {!compact && <span>{dark ? t('Açık moda geç', 'Switch to light mode') : t('Karanlık moda geç', 'Switch to dark mode')}</span>}
     </button>
   );
@@ -79,6 +103,7 @@ export default function App() {
   const [route, setRoute] = useState(currentRoute);
   const [toast, setToast] = useState(null);
   const publicationAlertSnapshot = useRef(null);
+  const seenFailedAlerts = useRef(loadSeenFailedAlerts());
   const generationBatchSnapshot = useRef(null);
   const notifiedGenerationBatches = useRef(new Set());
   const [theme, setTheme] = useState(() => document.documentElement.classList.contains('dark') ? 'dark' : 'light');
@@ -102,7 +127,7 @@ export default function App() {
     document.documentElement.classList.toggle('dark', dark);
     document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
     localStorage.setItem('social-plan-theme', theme);
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#070b14' : '#0f172a');
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#090c10' : '#f5f7fa');
   }, [theme]);
 
   const notify = useCallback((message, type = 'success', options = {}) => {
@@ -123,31 +148,51 @@ export default function App() {
         const failed = failedPage?.items || [];
         const reviewRequired = reviewPage?.items || [];
         const alerts = [...failed, ...reviewRequired];
-        const nextSnapshot = new Map(alerts.map((item) => [item.id, item.updatedAt]));
+        const failedTotal = Number.isFinite(failedPage?.totalElements) ? failedPage.totalElements : failed.length;
+        const reviewTotal = Number.isFinite(reviewPage?.totalElements) ? reviewPage.totalElements : reviewRequired.length;
+        const unseenFailed = failed.filter(
+          (item) => seenFailedAlerts.current.get(String(item.id)) !== failedAlertVersion(item),
+        );
+        const nextSnapshot = {
+          items: new Map(alerts.map((item) => [item.id, item.updatedAt])),
+          failedTotal,
+          reviewTotal,
+        };
         const previousSnapshot = publicationAlertSnapshot.current;
+        let failedCount = unseenFailed.length;
+        let reviewCount = 0;
 
         if (previousSnapshot === null) {
-          if (alerts.length > 0) {
-            notify(
-              t(`${alerts.length} yayın sorunu inceleme bekliyor: ${failed.length} başarısız, ${reviewRequired.length} doğrulanamadı.`, `${alerts.length} publication issues require review: ${failed.length} failed, ${reviewRequired.length} could not be verified.`),
-              'error',
-              { href: reviewRequired.length > 0 ? '#/contents?status=REVIEW_REQUIRED' : '#/contents?status=FAILED' },
-            );
-          }
+          reviewCount = reviewTotal;
         } else {
           const changed = alerts.filter(
-            (item) => previousSnapshot.get(item.id) !== item.updatedAt,
+            (item) => previousSnapshot.items.get(item.id) !== item.updatedAt,
           );
-          if (changed.length > 0) {
-            const failedCount = changed.filter((item) => item.status === 'FAILED').length;
-            const reviewCount = changed.filter((item) => item.status === 'REVIEW_REQUIRED').length;
-            notify(
-              t(`Yeni yayın sorunu: ${failedCount} başarısız, ${reviewCount} platform doğrulaması bekliyor. İçerikler ekranından kontrol edin.`, `New publication issue: ${failedCount} failed, ${reviewCount} awaiting platform verification. Check the Contents screen.`),
-              'error',
-              { href: reviewCount > 0 ? '#/contents?status=REVIEW_REQUIRED' : '#/contents?status=FAILED' },
-            );
-          }
+          reviewCount = Math.max(
+            changed.filter((item) => item.status === 'REVIEW_REQUIRED').length,
+            Math.max(0, reviewTotal - previousSnapshot.reviewTotal),
+          );
         }
+
+        if (failedCount + reviewCount > 0) {
+          const message = failedCount > 0 && reviewCount > 0
+            ? t(`${failedCount} yayın başarısız oldu; ${reviewCount} içerik manuel inceleme gerektiriyor.`, `${failedCount} publications failed; ${reviewCount} contents require manual review.`)
+            : failedCount > 0
+              ? t(`${failedCount} yayın başarısız oldu. İçerikler ekranından kontrol edin.`, `${failedCount} publications failed. Check the Contents screen.`)
+              : t(`${reviewCount} içerik manuel inceleme gerektiriyor.`, `${reviewCount} contents require manual review.`);
+          notify(
+            message,
+            'error',
+            { href: reviewCount > 0 ? '#/contents?status=REVIEW_REQUIRED' : '#/contents?status=FAILED' },
+          );
+        }
+
+        failed.forEach((item) => {
+          const key = String(item.id);
+          seenFailedAlerts.current.delete(key);
+          seenFailedAlerts.current.set(key, failedAlertVersion(item));
+        });
+        saveSeenFailedAlerts(seenFailedAlerts.current);
         publicationAlertSnapshot.current = nextSnapshot;
       } catch {
         return;
@@ -209,70 +254,71 @@ export default function App() {
   }, [notify, t]);
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 transition-colors dark:bg-[#0b0d10] dark:text-slate-200">
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-slate-200 bg-white px-3 py-5 transition-colors dark:border-slate-800 dark:bg-[#101318] lg:flex">
-        <nav className="space-y-1">
-          <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">{t('Çalışma alanı', 'Workspace')}</p>
+    <div className="app-shell">
+      <aside className="app-sidebar">
+        <nav className="space-y-1" aria-label={t('Ana menü', 'Main navigation')}>
+          <p className="px-3 pb-2.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">{t('Çalışma alanı', 'Workspace')}</p>
           {Object.entries(routes).map(([key, item]) => (
             <a
               key={key}
               href={`#/${key}`}
-              className={`group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
+              aria-current={route === key ? 'page' : undefined}
+              className={`group relative flex items-center gap-3 rounded-[10px] border px-3 py-2.5 text-sm font-medium transition-colors ${
                 route === key
-                  ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300'
-                  : 'text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white'
+                  ? 'border-slate-200 bg-white text-slate-950 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white'
+                  : 'border-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800/70 dark:hover:text-white'
               }`}
             >
-              {route === key && <span className="absolute inset-y-2 left-0 w-0.5 rounded-full bg-blue-600 dark:bg-blue-400" />}
-              <span className={route === key ? 'text-blue-600 dark:text-blue-300' : 'text-slate-400'}><NavIcon name={item.icon} /></span>
+              <span className={route === key ? 'text-blue-700 dark:text-blue-400' : 'text-slate-400 transition-colors group-hover:text-slate-600 dark:text-slate-500 dark:group-hover:text-slate-300'}><NavIcon name={item.icon} /></span>
               {t(item.label, { Üretim: 'Generation', İçerikler: 'Contents', Takvim: 'Calendar', Entegrasyonlar: 'Integrations', Ayarlar: 'Settings' }[item.label])}
             </a>
           ))}
         </nav>
 
-        <div className="mt-auto space-y-3">
-          <div className="grid grid-cols-2 gap-1 rounded-xl border border-slate-200 bg-slate-50 p-1 dark:border-slate-700 dark:bg-slate-800" aria-label={t('Dil seçimi', 'Language selection')}>
-            {[['tr', 'Türkçe'], ['en', 'English']].map(([value, label]) => <button key={value} type="button" onClick={() => setLanguage(value)} className={`rounded-lg px-2 py-2 text-xs font-bold transition ${language === value ? 'bg-white text-indigo-700 shadow-sm dark:bg-slate-700 dark:text-indigo-300' : 'text-slate-500 dark:text-slate-400'}`} aria-pressed={language === value}>{label}</button>)}
+        <div className="mt-auto space-y-2.5 border-t border-slate-200 pt-4 dark:border-slate-800">
+          <div className="grid grid-cols-2 gap-1 rounded-[10px] bg-slate-200/60 p-1 dark:bg-slate-800" aria-label={t('Dil seçimi', 'Language selection')}>
+            {[['tr', 'Türkçe'], ['en', 'English']].map(([value, label]) => <button key={value} type="button" onClick={() => setLanguage(value)} className={`rounded-lg px-2 py-2 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30 ${language === value ? 'bg-white text-slate-950 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'}`} aria-pressed={language === value}>{label}</button>)}
           </div>
           <ThemeToggle theme={theme} onToggle={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} />
         </div>
       </aside>
 
-      <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/90 px-4 py-3 backdrop-blur transition-colors dark:border-slate-800 dark:bg-slate-900/90 lg:hidden">
+      <header className="app-mobile-header">
         <div className="flex items-center justify-end">
           <div className="flex items-center gap-2">
-            <select value={language} onChange={(event) => setLanguage(event.target.value)} aria-label={t('Dil seçimi', 'Language selection')} className="rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs font-bold text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"><option value="tr">TR</option><option value="en">EN</option></select>
+            <select value={language} onChange={(event) => setLanguage(event.target.value)} aria-label={t('Dil seçimi', 'Language selection')} className="h-9 rounded-[10px] border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-600 shadow-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/15 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"><option value="tr">TR</option><option value="en">EN</option></select>
             <ThemeToggle compact theme={theme} onToggle={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} />
           </div>
         </div>
       </header>
 
-      <main className="pb-24 lg:ml-60 lg:pb-10">
-        <div className="mx-auto max-w-[1500px] px-4 py-7 sm:px-7 lg:px-10 lg:py-10">
+      <main className="app-main">
+        <div className="mx-auto max-w-[1440px] px-4 py-7 sm:px-7 lg:px-10 lg:py-9 xl:px-12">
           <ActivePage notify={notify} />
         </div>
       </main>
 
-      <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-slate-200 bg-white/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 shadow-[0_-8px_30px_rgba(15,23,42,0.06)] backdrop-blur transition-colors dark:border-slate-800 dark:bg-slate-900/95 lg:hidden">
+      <nav className="app-mobile-nav" aria-label={t('Ana menü', 'Main navigation')}>
         {Object.entries(routes).map(([key, item]) => (
           <a
             key={key}
             href={`#/${key}`}
-            className={`flex flex-col items-center gap-1 rounded-xl py-1.5 text-[10px] font-bold transition ${route === key ? 'text-indigo-700 dark:text-indigo-300' : 'text-slate-400 dark:text-slate-500'}`}
+            aria-current={route === key ? 'page' : undefined}
+            className={`flex min-w-0 flex-col items-center gap-1 rounded-lg py-1.5 text-[10px] font-semibold transition-colors ${route === key ? 'text-blue-700 dark:text-blue-300' : 'text-slate-400 dark:text-slate-500'}`}
           >
-            <span className={`grid h-7 w-9 place-items-center rounded-lg text-sm ${route === key ? 'bg-blue-50 dark:bg-blue-950/50' : ''}`}><NavIcon name={item.icon} /></span>
-            {t(item.short, { Üretim: 'Generate', İçerik: 'Content', Takvim: 'Calendar', Entegrasyon: 'Integrations', Ayarlar: 'Settings' }[item.short])}
+            <span className={`grid h-7 w-9 place-items-center rounded-lg text-sm ${route === key ? 'bg-blue-50 dark:bg-blue-950/60' : ''}`}><NavIcon name={item.icon} /></span>
+            <span className="max-w-full truncate px-0.5">{t(item.short, { Üretim: 'Generate', İçerik: 'Content', Takvim: 'Calendar', Entegrasyon: 'Integrations', Ayarlar: 'Settings' }[item.short])}</span>
           </a>
         ))}
       </nav>
 
       {toast && (() => {
-        const className = `fixed right-4 top-20 z-[70] max-w-sm rounded-xl border px-4 py-3 text-left text-sm font-semibold shadow-xl sm:right-7 lg:top-6 ${
+        const className = `fixed right-4 top-20 z-[70] max-w-sm rounded-xl border px-4 py-3.5 text-left text-sm font-medium shadow-xl backdrop-blur sm:right-7 lg:top-6 ${
             toast.type === 'error'
-              ? 'border-rose-100 bg-rose-50 text-rose-700'
-              : 'border-emerald-100 bg-white text-slate-800 dark:border-emerald-900 dark:bg-slate-800 dark:text-slate-100'
-          } ${toast.href ? 'cursor-pointer transition hover:-translate-y-0.5 hover:border-rose-300' : ''}`;
-        const content = <><span className={`mr-2 ${toast.type === 'error' ? 'text-rose-500' : 'text-emerald-500'}`}>{toast.type === 'error' ? '!' : '✓'}</span>{toast.message}{toast.href && <span className="ml-2 whitespace-nowrap underline decoration-current/40 underline-offset-2">{t('İncele →', 'Review →')}</span>}</>;
+              ? 'border-rose-200 bg-rose-50/95 text-rose-800 dark:border-rose-900 dark:bg-rose-950/95 dark:text-rose-200'
+              : 'border-slate-200 bg-white/95 text-slate-800 dark:border-slate-700 dark:bg-slate-900/95 dark:text-slate-100'
+          } ${toast.href ? 'cursor-pointer transition hover:-translate-y-0.5 hover:border-blue-300 dark:hover:border-blue-700' : ''}`;
+        const content = <><span className={`mr-2 font-bold ${toast.type === 'error' ? 'text-rose-500' : 'text-emerald-600 dark:text-emerald-400'}`}>{toast.type === 'error' ? '!' : '✓'}</span>{toast.message}{toast.href && <span className="ml-2 whitespace-nowrap font-semibold text-blue-700 underline decoration-current/30 underline-offset-2 dark:text-blue-300">{t('İncele →', 'Review →')}</span>}</>;
         return toast.href
           ? <a href={toast.href} className={className} role="status" onClick={() => setToast(null)}>{content}</a>
           : <div className={className} role="status">{content}</div>;

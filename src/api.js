@@ -67,6 +67,7 @@ function validationMessages(payload) {
 }
 
 const ERROR_MESSAGES = {
+  INVALID_CONTENT_STATE_TRANSITION: ['Bu işlem içeriğin mevcut durumunda yapılamaz. İçerik durumunu yenileyip tekrar kontrol edin.', 'This action is not available in the content’s current status. Refresh and check the content status.'],
   access_denied: ['Hesap bağlantısına izin verilmedi.', 'Account connection was denied.'],
   state_invalid: ['Bağlantı oturumu geçersiz veya süresi doldu.', 'The connection session is invalid or expired.'],
   token_exchange_failed: ['Platform erişim anahtarı alınamadı.', 'The platform access token could not be obtained.'],
@@ -210,6 +211,16 @@ export const api = {
     return request(`/generation-batches/${segment(id)}`);
   },
 
+  listGenerationAttempts(batchId) {
+    return request(`/generation-batches/${segment(batchId)}/attempts`);
+  },
+
+  approveGenerationRegeneration(batchId, attemptId) {
+    return request(`/generation-batches/${segment(batchId)}/attempts/${segment(attemptId)}/regeneration-consent`, {
+      method: 'POST',
+    });
+  },
+
   createBatch(payload, files = []) {
     const formData = new FormData();
     formData.append(
@@ -233,8 +244,16 @@ export const api = {
     });
   },
 
+  estimateGenerationBudget(payload) {
+    return jsonRequest('/generation-batches/budget/estimate', { method: 'POST', body: payload });
+  },
+
   listContents(filters = {}) {
     return request('/contents', { query: filters });
+  },
+
+  getContentStatusCounts(filters = {}) {
+    return request('/contents/status-counts', { query: filters });
   },
 
   getCalendar(filters = {}) {
@@ -286,8 +305,12 @@ export const api = {
     return request(`/contents/${segment(id)}/schedule`, { method: 'DELETE' });
   },
 
-  getPublishAttempts(id) {
-    return request(`/contents/${segment(id)}/publish-attempts`);
+  markReviewPublished(id) {
+    return request(`/contents/${segment(id)}/review/published`, { method: 'PUT' });
+  },
+
+  markReviewFailed(id) {
+    return request(`/contents/${segment(id)}/review/failed`, { method: 'PUT' });
   },
 
   listCredentials() {
