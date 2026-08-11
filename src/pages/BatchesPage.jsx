@@ -24,8 +24,10 @@ import {
   StatusBadge,
   Textarea,
 } from '../components/ui';
+import { useI18n } from '../i18n';
 
 const initialForm = {
+  title: '',
   platform: '',
   contentType: '',
   requestedCount: 5,
@@ -46,8 +48,66 @@ const GENERATION_STRATEGY_LABELS = {
   COMBINED: 'Birleşik',
 };
 
+const MEDIA_SELECTION_POLICIES = {
+  LINKEDIN: {
+    POST: { image: 'optional', video: 'optional', exclusive: true },
+  },
+  INSTAGRAM: {
+    POST: { image: 'required', video: 'forbidden' },
+    REEL: { image: 'optional', video: 'required' },
+  },
+  TWITTER: {
+    TWEET: { image: 'optional', video: 'optional', exclusive: true },
+  },
+};
+
+function mediaSelectionPolicy(platform, contentType) {
+  return MEDIA_SELECTION_POLICIES[platform]?.[contentType] || { image: 'optional', video: 'optional', exclusive: false };
+}
+
+function applyMediaSelectionPolicy(current, platform, contentType) {
+  const policy = mediaSelectionPolicy(platform, contentType);
+  const includeImage = policy.image === 'required' ? true : policy.image === 'forbidden' ? false : current.includeImage;
+  let includeVideo = policy.video === 'required' ? true : policy.video === 'forbidden' ? false : current.includeVideo;
+  if (policy.exclusive && includeImage && includeVideo) includeVideo = false;
+  return {
+    ...current,
+    platform,
+    contentType,
+    includeImage,
+    includeVideo,
+  };
+}
+
+function mediaSelectionError(form) {
+  if (['LINKEDIN', 'TWITTER'].includes(form.platform) && form.includeImage && form.includeVideo) {
+    return form.platform === 'LINKEDIN'
+      ? 'LinkedIn gönderisinde görsel ve video aynı anda seçilemez.'
+      : 'X gönderisinde görsel ve video aynı anda seçilemez.';
+  }
+  if (form.platform !== 'INSTAGRAM') return null;
+  if (form.contentType === 'POST' && (!form.includeImage || form.includeVideo)) {
+    return 'Instagram gönderisi için görsel üretimi zorunludur ve video üretimi desteklenmez.';
+  }
+  if (form.contentType === 'REEL' && !form.includeVideo) {
+    return 'Instagram Reels için video üretimi zorunludur; görsel isteğe bağlı kapak olarak eklenebilir.';
+  }
+  return null;
+}
+
 function linksExist(value) {
   return value.split('\n').some((item) => item.trim());
+}
+
+function formatUsd(value, locale) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return '—';
+  return new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 6,
+  }).format(amount);
 }
 
 function ModelPicker({ capability, models, provider, model, onChange, required }) {
@@ -65,7 +125,7 @@ function ModelPicker({ capability, models, provider, model, onChange, required }
   );
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
+    <div className="grid gap-4 md:grid-cols-2">
       <Field label="Sağlayıcı" required={required}>
         <Select
           value={provider}
@@ -105,26 +165,55 @@ function ModelPicker({ capability, models, provider, model, onChange, required }
   );
 }
 
-function BatchForm({ platforms, models, onCreated, notify }) {
+function BatchForm({ platforms, models, limits, onCreated, notify }) {
+  const { locale, t } = useI18n();
   const [form, setForm] = useState(initialForm);
   const [files, setFiles] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [budgetEstimate, setBudgetEstimate] = useState(null);
+  const [budgetLoading, setBudgetLoading] = useState(false);
+  const [budgetError, setBudgetError] = useState(null);
 
   useEffect(() => {
     if (form.platform || !platforms.length) return;
     const first = platforms[0];
-    setForm((current) => ({
-      ...current,
-      platform: first.platform,
-      contentType: first.contentTypes?.[0] || '',
-    }));
+    const contentType = first.contentTypes?.[0] || '';
+    setForm((current) => applyMediaSelectionPolicy(current, first.platform, contentType));
   }, [form.platform, platforms]);
 
   const supportedTypes = platforms.find((item) => item.platform === form.platform)?.contentTypes || [];
+  const mediaPolicy = mediaSelectionPolicy(form.platform, form.contentType);
+  const mediaOptions = [
+    {
+      name: 'includeImage',
+      label: 'Görsel üret',
+      state: mediaPolicy.image,
+      description: mediaPolicy.image === 'required'
+        ? 'Instagram gönderisi için zorunlu.'
+        : form.platform === 'INSTAGRAM' && form.contentType === 'REEL'
+          ? 'İsteğe bağlı Reels kapak görseli.'
+          : 'Her taslağa bir görsel eklenir.',
+    },
+    {
+      name: 'includeVideo',
+      label: 'Video üret',
+      state: mediaPolicy.video,
+      description: mediaPolicy.video === 'required'
+        ? 'Instagram Reels için zorunlu.'
+        : mediaPolicy.video === 'forbidden'
+          ? 'Instagram gönderisinde video desteklenmiyor.'
+          : 'Her taslağa bir video eklenir.',
+    },
+  ];
   const byCapability = (capability) => models.filter((item) => item.capability === capability);
   const linkCount = form.links.split('\n').filter((item) => item.trim()).length;
   const sourceCount = linkCount + files.length;
   const requestedCount = Number(form.requestedCount);
+  const requestedCountLimit = Math.min(
+    limits?.generationMaxContentsPerBatch ?? 1000,
+    form.includeImage ? limits?.generationMaxImagesPerBatch ?? 1000 : Infinity,
+    form.includeVideo ? limits?.generationMaxVideosPerBatch ?? 1000 : Infinity,
+  );
   const automaticStrategy = sourceCount > 0 && sourceCount === requestedCount
     ? 'SOURCE_BASED'
     : 'COMBINED';
@@ -132,7 +221,54 @@ function BatchForm({ platforms, models, onCreated, notify }) {
     && sourceCount > 0
     && sourceCount < requestedCount;
 
+  useEffect(() => {
+    let cancelled = false;
+    const canEstimate = Number.isInteger(requestedCount)
+      && requestedCount >= 1
+      && requestedCount <= requestedCountLimit
+      && form.textProvider
+      && form.textModel;
+    if (!canEstimate) {
+      setBudgetEstimate(null);
+      setBudgetError(null);
+      setBudgetLoading(false);
+      return undefined;
+    }
+
+    const timeout = window.setTimeout(async () => {
+      setBudgetLoading(true);
+      setBudgetError(null);
+      try {
+        const estimate = await api.estimateGenerationBudget({
+          requestedCount,
+          includeImage: form.includeImage,
+          includeVideo: form.includeVideo,
+          textModel: { provider: form.textProvider, model: form.textModel },
+        });
+        if (!cancelled) setBudgetEstimate(estimate);
+      } catch (estimateError) {
+        if (!cancelled) {
+          setBudgetEstimate(null);
+          setBudgetError(estimateError);
+        }
+      } finally {
+        if (!cancelled) setBudgetLoading(false);
+      }
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [form.includeImage, form.includeVideo, form.textModel, form.textProvider, requestedCount, requestedCountLimit]);
+
   const setValue = (name, value) => setForm((current) => ({ ...current, [name]: value }));
+  const setMediaValue = (name, value) => setForm((current) => {
+    const policy = mediaSelectionPolicy(current.platform, current.contentType);
+    if (!value || !policy.exclusive) return { ...current, [name]: value };
+    const otherName = name === 'includeImage' ? 'includeVideo' : 'includeImage';
+    return { ...current, [name]: true, [otherName]: false };
+  });
   const addFiles = (selectedFiles) => {
     const selected = Array.from(selectedFiles);
     setFiles((current) => {
@@ -157,11 +293,30 @@ function BatchForm({ platforms, models, onCreated, notify }) {
 
   const handlePlatform = (platform) => {
     const contentTypes = platforms.find((item) => item.platform === platform)?.contentTypes || [];
-    setForm((current) => ({ ...current, platform, contentType: contentTypes[0] || '' }));
+    const contentType = contentTypes[0] || '';
+    setForm((current) => applyMediaSelectionPolicy(current, platform, contentType));
+  };
+
+  const handleContentType = (contentType) => {
+    setForm((current) => applyMediaSelectionPolicy(current, current.platform, contentType));
   };
 
   const submit = async (event) => {
     event.preventDefault();
+    const title = form.title.trim();
+    if (!title) {
+      notify('İçerik başlığı zorunludur.', 'error');
+      return;
+    }
+    const selectionError = mediaSelectionError(form);
+    if (selectionError) {
+      notify(selectionError, 'error');
+      return;
+    }
+    if (!Number.isInteger(requestedCount) || requestedCount < 1 || requestedCount > requestedCountLimit) {
+      notify(t(`İçerik adedi 1–${requestedCountLimit} arasında olmalıdır.`, `Content count must be between 1 and ${requestedCountLimit}.`), 'error');
+      return;
+    }
     if (!linksExist(form.links) && files.length === 0) {
       notify('En az bir kaynak linki veya döküman ekleyin.', 'error');
       return;
@@ -178,9 +333,17 @@ function BatchForm({ platforms, models, onCreated, notify }) {
       notify('Video üretimi için sağlayıcı ve model seçin.', 'error');
       return;
     }
+    if (budgetEstimate && Number(budgetEstimate.totalCostUsd) > Number(limits?.generationMaxEstimatedCostUsd)) {
+      notify(
+        t(`Tahmini maliyet ${limits.generationMaxEstimatedCostUsd} USD sınırını aşıyor.`, `Estimated cost exceeds the ${limits.generationMaxEstimatedCostUsd} USD limit.`),
+        'error',
+      );
+      return;
+    }
 
     const links = form.links.split('\n').map((item) => item.trim()).filter(Boolean);
     const payload = {
+      title,
       platform: form.platform,
       contentType: form.contentType,
       requestedCount: Number(form.requestedCount),
@@ -206,10 +369,24 @@ function BatchForm({ platforms, models, onCreated, notify }) {
   };
 
   return (
-    <form onSubmit={submit} className="space-y-7">
-      <div>
+    <form onSubmit={submit} className="space-y-5">
+      <section className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900/40 sm:p-6">
         <p className="eyebrow">1 · Format</p>
-        <div className="mt-3 grid gap-4 sm:grid-cols-3">
+        <div className="mt-4">
+          <Field label="İçerik başlığı" hint="En fazla 240 karakter" required>
+            <Input
+              value={form.title}
+              required
+              maxLength={240}
+              placeholder="Örn. Odak Haftası"
+              onChange={(event) => setValue('title', event.target.value)}
+            />
+          </Field>
+          <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+            Üretilen içeriklerin sonuna otomatik olarak 1, 2, 3… eklenir.
+          </p>
+        </div>
+        <div className="mt-4 grid gap-4 sm:grid-cols-3">
           <Field label="Platform" required>
             <Select value={form.platform} required onChange={(event) => handlePlatform(event.target.value)}>
               {platforms.map((item) => (
@@ -218,71 +395,125 @@ function BatchForm({ platforms, models, onCreated, notify }) {
             </Select>
           </Field>
           <Field label="İçerik türü" required>
-            <Select value={form.contentType} required onChange={(event) => setValue('contentType', event.target.value)}>
+            <Select value={form.contentType} required onChange={(event) => handleContentType(event.target.value)}>
               {supportedTypes.map((item) => <option key={item} value={item}>{CONTENT_TYPE_LABELS[item] || item}</option>)}
             </Select>
           </Field>
-          <Field label="İçerik adedi" hint="En az 1" required>
+          <Field label="İçerik adedi" hint={`${t('En fazla', 'Up to')} ${requestedCountLimit}`} required>
             <Input
               type="number"
               min="1"
+              max={requestedCountLimit}
               required
               value={form.requestedCount}
               onChange={(event) => setValue('requestedCount', event.target.value)}
             />
           </Field>
         </div>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          {[
-            ['includeImage', 'Görsel üret', 'Her taslağa bir görsel eklenir.'],
-            ['includeVideo', 'Video üret', 'Her taslağa bir video eklenir.'],
-          ].map(([name, label, description]) => (
-            <label key={name} className={`flex cursor-pointer items-start gap-3 rounded-2xl border p-4 transition ${form[name] ? 'border-indigo-200 bg-indigo-50/60' : 'border-slate-200 hover:bg-slate-50'}`}>
-              <input
-                type="checkbox"
-                className="mt-0.5 h-4 w-4 accent-indigo-600"
-                checked={form[name]}
-                onChange={(event) => setValue(name, event.target.checked)}
-              />
-              <span>
-                <span className="block text-sm font-bold text-slate-800">{label}</span>
-                <span className="mt-1 block text-xs leading-5 text-slate-500">{description}</span>
-              </span>
-            </label>
-          ))}
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          {mediaOptions.map(({ name, label, state, description }) => {
+            const locked = state !== 'optional';
+            return (
+              <label key={name} className={`flex items-start gap-3 rounded-xl border p-4 transition-colors ${locked ? 'cursor-not-allowed' : 'cursor-pointer'} ${form[name] ? 'border-blue-300 bg-blue-50/70 dark:border-blue-700 dark:bg-blue-950/30' : locked ? 'border-slate-200 bg-slate-100/70 opacity-70 dark:border-slate-800 dark:bg-slate-900/60' : 'border-slate-200 bg-slate-50/60 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950/40 dark:hover:border-slate-600 dark:hover:bg-slate-800/70'}`}>
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 rounded accent-blue-600"
+                  checked={form[name]}
+                  disabled={locked}
+                  onChange={(event) => setMediaValue(name, event.target.checked)}
+                />
+                <span className="min-w-0">
+                  <span className="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-800 dark:text-slate-100">
+                    {label}
+                    {state === 'required' && <span className="rounded-md bg-blue-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-blue-700 dark:bg-blue-950 dark:text-blue-300">Zorunlu</span>}
+                    {state === 'forbidden' && <span className="rounded-md bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-600 dark:bg-slate-800 dark:text-slate-400">Kullanılamaz</span>}
+                  </span>
+                  <span className="mt-1 block text-xs leading-5 text-slate-500 dark:text-slate-400">{description}</span>
+                </span>
+              </label>
+            );
+          })}
         </div>
-      </div>
+        {form.platform === 'INSTAGRAM' && (
+          <p className="mt-3 rounded-lg border border-blue-100 bg-blue-50/60 px-3 py-2.5 text-xs leading-5 text-blue-800 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300">
+            {form.contentType === 'POST'
+              ? 'Instagram gönderisi için bir görsel zorunludur; video desteklenmez.'
+              : 'Instagram Reels için video zorunludur; görsel isteğe bağlı kapak olarak kullanılabilir.'}
+          </p>
+        )}
+        {mediaPolicy.exclusive && (
+          <p className="mt-3 rounded-lg border border-blue-100 bg-blue-50/60 px-3 py-2.5 text-xs leading-5 text-blue-800 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300">
+            Bir görsel veya bir video seçebilirsiniz; ikisi aynı anda kullanılamaz.
+          </p>
+        )}
+      </section>
 
-      <div className="border-t border-slate-100 pt-7">
+      <section className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900/40 sm:p-6">
         <p className="eyebrow">2 · Yapay zeka modelleri</p>
         {!models.length && (
-          <p className="mt-3 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-700">
+          <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
             Model kataloğu boş. Sağlayıcıyı seçip sunucunun kabul ettiği model kimliğini elle girebilirsiniz.
           </p>
         )}
-        <div className="mt-4 space-y-5">
-          <div className="rounded-2xl bg-slate-50 p-4">
-            <p className="mb-3 text-sm font-bold text-slate-800">Metin ve hashtag</p>
+        <div className="mt-4 space-y-3">
+          <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-950/40 sm:p-5">
+            <p className="mb-4 text-sm font-semibold text-slate-800 dark:text-slate-100">Metin ve hashtag</p>
             <ModelPicker capability="Metin" models={byCapability('TEXT')} provider={form.textProvider} model={form.textModel} required onChange={(provider, model) => setModel('text', provider, model)} />
           </div>
           {form.includeImage && (
-            <div className="rounded-2xl bg-slate-50 p-4">
-              <p className="mb-3 text-sm font-bold text-slate-800">Görsel</p>
+            <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-950/40 sm:p-5">
+              <p className="mb-4 text-sm font-semibold text-slate-800 dark:text-slate-100">Görsel</p>
               <ModelPicker capability="Görsel" models={byCapability('IMAGE')} provider={form.imageProvider} model={form.imageModel} required onChange={(provider, model) => setModel('image', provider, model)} />
             </div>
           )}
           {form.includeVideo && (
-            <div className="rounded-2xl bg-slate-50 p-4">
-              <p className="mb-3 text-sm font-bold text-slate-800">Video</p>
+            <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-950/40 sm:p-5">
+              <p className="mb-4 text-sm font-semibold text-slate-800 dark:text-slate-100">Video</p>
               <ModelPicker capability="Video" models={byCapability('VIDEO')} provider={form.videoProvider} model={form.videoModel} required onChange={(provider, model) => setModel('video', provider, model)} />
             </div>
           )}
+          <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-950/40 sm:p-5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">{t('Tahmini üretim maliyeti', 'Estimated generation cost')}</p>
+              {budgetLoading && <span className="text-xs font-medium text-slate-400">{t('Hesaplanıyor…', 'Calculating…')}</span>}
+            </div>
+            {!form.textProvider || !form.textModel ? (
+              <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">{t('Maliyet tahmini için metin sağlayıcısı ve modeli seçin.', 'Select a text provider and model to estimate cost.')}</p>
+            ) : budgetError ? (
+              <p className="mt-2 text-xs leading-5 text-rose-600 dark:text-rose-400">{budgetError.message}</p>
+            ) : budgetEstimate ? (
+              <div className="mt-4 space-y-4">
+                <div className="flex items-end justify-between gap-4">
+                  <span className="text-xs font-medium text-slate-500 dark:text-slate-400">{t('Toplam tahmin', 'Estimated total')}</span>
+                  <strong className="text-2xl tracking-tight text-slate-950 dark:text-white">{formatUsd(budgetEstimate.totalCostUsd, locale)}</strong>
+                </div>
+                {Number(budgetEstimate.totalCostUsd) > Number(limits?.generationMaxEstimatedCostUsd) && (
+                  <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+                    {t(`Tahmini maliyet ${limits.generationMaxEstimatedCostUsd} USD sınırını aşıyor.`, `Estimated cost exceeds the ${limits.generationMaxEstimatedCostUsd} USD limit.`)}
+                  </p>
+                )}
+                <div className="grid gap-2 text-xs sm:grid-cols-2">
+                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 dark:border-slate-800 dark:bg-slate-900/60"><span className="text-slate-500 dark:text-slate-400">{t('Metin girdisi', 'Text input')}</span><strong className="mt-1 block text-slate-800 dark:text-slate-200">{formatUsd(budgetEstimate.textInputCostUsd, locale)}</strong></div>
+                  <div className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 dark:border-slate-800 dark:bg-slate-900/60"><span className="text-slate-500 dark:text-slate-400">{t('Metin çıktısı', 'Text output')}</span><strong className="mt-1 block text-slate-800 dark:text-slate-200">{formatUsd(budgetEstimate.textOutputCostUsd, locale)}</strong></div>
+                  {form.includeImage && <div className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 dark:border-slate-800 dark:bg-slate-900/60"><span className="text-slate-500 dark:text-slate-400">{t('Görsel maliyeti', 'Image cost')}</span><strong className="mt-1 block text-slate-800 dark:text-slate-200">{formatUsd(budgetEstimate.imageCostUsd, locale)}</strong></div>}
+                  {form.includeVideo && <div className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 dark:border-slate-800 dark:bg-slate-900/60"><span className="text-slate-500 dark:text-slate-400">{t('Video maliyeti', 'Video cost')}</span><strong className="mt-1 block text-slate-800 dark:text-slate-200">{formatUsd(budgetEstimate.videoCostUsd, locale)}</strong></div>}
+                </div>
+                <div className="border-t border-slate-200 pt-3 text-xs leading-5 text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                  <p>{t('Tahmini token kullanımı', 'Estimated token usage')}: {Number(budgetEstimate.estimatedInputTokens).toLocaleString(locale)} {t('girdi', 'input')} · {Number(budgetEstimate.estimatedOutputTokens).toLocaleString(locale)} {t('çıktı', 'output')}</p>
+                  <p>{t('Güncel metin fiyatı', 'Current text pricing')}: {formatUsd(budgetEstimate.textInputCostUsdPerMillionTokens, locale)} / 1M {t('girdi', 'input')} · {formatUsd(budgetEstimate.textOutputCostUsdPerMillionTokens, locale)} / 1M {t('çıktı', 'output')}</p>
+                  <p>{t('Fiyat kaynağı', 'Pricing source')}: {budgetEstimate.textPricingSource || '—'}</p>
+                </div>
+              </div>
+            ) : (
+              <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">{t('Geçerli bir içerik adedi girin.', 'Enter a valid content count.')}</p>
+            )}
+          </div>
         </div>
-      </div>
+      </section>
 
-      <div className="border-t border-slate-100 pt-7">
+      <section className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900/40 sm:p-6">
         <p className="eyebrow">3 · Kaynaklar</p>
-        <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50 p-4">
+        <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-950/40 sm:p-5">
           <Field label="Üretim stratejisi" hint={`${sourceCount} kaynak · ${requestedCount || 0} içerik`}>
             <Select
               value={form.generationStrategy}
@@ -295,7 +526,7 @@ function BatchForm({ platforms, models, onCreated, notify }) {
               <option value="COMBINED">Birleşik</option>
             </Select>
           </Field>
-          <p className="mt-2 text-xs leading-5 text-slate-500">
+          <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
             {form.generationStrategy === 'SOURCE_BASED'
               ? 'Her içerik bir birincil kaynağa atanır; diğer kaynaklar destekleyici bağlam olarak kullanılır.'
               : form.generationStrategy === 'COMBINED'
@@ -303,12 +534,12 @@ function BatchForm({ platforms, models, onCreated, notify }) {
                 : 'Kaynak ve içerik sayıları eşitse kaynak bazlı, diğer durumlarda birleşik strateji seçilir.'}
           </p>
           {sourceReuseWarning && (
-            <p className="mt-2 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
+            <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-5 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
               Kaynak sayısı içerik sayısından az. Bazı kaynaklar sırayla birden fazla içerikte ana kaynak olarak kullanılacak.
             </p>
           )}
         </div>
-        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <div className="mt-5 grid gap-5 lg:grid-cols-2">
           <Field label="Kaynak linkleri" hint="Her satıra bir link">
             <Textarea
               value={form.links}
@@ -317,7 +548,7 @@ function BatchForm({ platforms, models, onCreated, notify }) {
             />
           </Field>
           <Field label="Dokümanlar" hint="PDF, DOCX veya TXT">
-            <label className="flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 text-center transition hover:border-indigo-300 hover:bg-indigo-50/40 dark:border-slate-700 dark:bg-slate-800/60 dark:hover:border-indigo-500 dark:hover:bg-indigo-950/30">
+            <label className="flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50/70 px-4 text-center transition-colors hover:border-blue-400 hover:bg-blue-50/50 dark:border-slate-700 dark:bg-slate-950/40 dark:hover:border-blue-600 dark:hover:bg-blue-950/20">
               <input
                 className="sr-only"
                 type="file"
@@ -328,14 +559,14 @@ function BatchForm({ platforms, models, onCreated, notify }) {
                   event.target.value = '';
                 }}
               />
-              <span className="text-sm font-bold text-slate-700 dark:text-slate-200">{files.length ? 'Başka dosya ekle' : 'Dosya seçin'}</span>
-              <span className="mt-1 text-xs text-slate-400">Bir veya birden fazla dosya seçebilirsiniz</span>
-              {files.length > 0 && <span className="mt-3 rounded-full bg-indigo-100 px-3 py-1 text-xs font-bold text-indigo-700">{files.length} dosya seçildi</span>}
+              <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">{files.length ? 'Başka dosya ekle' : 'Dosya seçin'}</span>
+              <span className="mt-1 text-xs text-slate-400 dark:text-slate-500">Bir veya birden fazla dosya seçebilirsiniz</span>
+              {files.length > 0 && <span className="mt-3 rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-700 dark:bg-blue-950 dark:text-blue-300">{files.length} dosya seçildi</span>}
             </label>
             {files.length > 0 && (
               <ul className="mt-3 space-y-2">
                 {files.map((file, index) => (
-                  <li key={`${file.name}-${file.size}-${file.lastModified}`} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-2 text-xs dark:border-slate-700">
+                  <li key={`${file.name}-${file.size}-${file.lastModified}`} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-900">
                     <span className="min-w-0 truncate font-medium text-slate-600 dark:text-slate-300">{file.name}</span>
                     <button type="button" onClick={() => removeFile(index)} className="shrink-0 font-bold text-rose-600 transition hover:text-rose-700 dark:text-rose-400 dark:hover:text-rose-300">Kaldır</button>
                   </li>
@@ -344,11 +575,11 @@ function BatchForm({ platforms, models, onCreated, notify }) {
             )}
           </Field>
         </div>
-      </div>
+      </section>
 
-      <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-6 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-xs leading-5 text-slate-400">İstek arka planda işlenecek; ilerlemeyi listeden izleyebilirsiniz.</p>
-        <Button type="submit" size="lg" disabled={busy || !platforms.length}>
+      <div className="flex flex-col-reverse gap-3 rounded-xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-900/60 sm:flex-row sm:items-center sm:justify-between">
+        <p className="max-w-lg text-xs leading-5 text-slate-500 dark:text-slate-400">İstek arka planda işlenecek; ilerlemeyi listeden izleyebilirsiniz.</p>
+        <Button type="submit" size="lg" className="w-full sm:w-auto" disabled={busy || !platforms.length}>
           {busy ? 'Kuyruğa alınıyor…' : 'Üretimi başlat'}
         </Button>
       </div>
@@ -362,58 +593,64 @@ function BatchDetail({ batch, loading, retryBusy, onRetry, onClose }) {
   const progress = batch.requestedCount ? (batch.completedCount / batch.requestedCount) * 100 : 0;
 
   return (
-    <div className="space-y-6">
-      <div className="grid gap-3 sm:grid-cols-3">
-        <div className="rounded-2xl bg-slate-50 p-4"><p className="text-xs font-semibold text-slate-400">Platform</p><p className="mt-1 font-bold text-slate-800">{PLATFORM_LABELS[batch.platform] || batch.platform}</p></div>
-        <div className="rounded-2xl bg-slate-50 p-4"><p className="text-xs font-semibold text-slate-400">Format</p><p className="mt-1 font-bold text-slate-800">{CONTENT_TYPE_LABELS[batch.contentType] || batch.contentType}</p></div>
-        <div className="rounded-2xl bg-slate-50 p-4"><p className="text-xs font-semibold text-slate-400">Durum</p><div className="mt-1"><StatusBadge label={meta.label} tone={meta.tone} /></div></div>
+    <div className="space-y-5">
+      <div>
+        <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Üretim başlığı</p>
+        <h2 className="mt-1.5 text-xl font-semibold text-slate-950 dark:text-slate-100">{batch.title || 'Başlıksız üretim'}</h2>
       </div>
-      <Progress value={progress} label={`${batch.completedCount} / ${batch.requestedCount} içerik hazır`} />
-      <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-        <p className="text-xs font-semibold text-slate-400">Üretim stratejisi</p>
-        <p className="mt-1 font-bold text-slate-800">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-900/50"><p className="text-xs font-medium text-slate-500 dark:text-slate-400">Platform</p><p className="mt-1.5 font-semibold text-slate-900 dark:text-slate-100">{PLATFORM_LABELS[batch.platform] || batch.platform}</p></div>
+        <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-900/50"><p className="text-xs font-medium text-slate-500 dark:text-slate-400">Format</p><p className="mt-1.5 font-semibold text-slate-900 dark:text-slate-100">{CONTENT_TYPE_LABELS[batch.contentType] || batch.contentType}</p></div>
+        <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-900/50"><p className="text-xs font-medium text-slate-500 dark:text-slate-400">Durum</p><div className="mt-1.5"><StatusBadge label={meta.label} tone={meta.tone} /></div></div>
+      </div>
+      <div className="rounded-xl border border-slate-200 p-4 dark:border-slate-800 dark:bg-slate-900/30">
+        <Progress value={progress} label={`${batch.completedCount} / ${batch.requestedCount} içerik hazır`} />
+      </div>
+      <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-900/50">
+        <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Üretim stratejisi</p>
+        <p className="mt-1.5 font-semibold text-slate-900 dark:text-slate-100">
           {GENERATION_STRATEGY_LABELS[batch.generationStrategy] || batch.generationStrategy || 'Belirtilmedi'}
         </p>
-        {batch.strategySelectionReason && <p className="mt-1 text-xs leading-5 text-slate-500">{batch.strategySelectionReason}</p>}
+        {batch.strategySelectionReason && <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{batch.strategySelectionReason}</p>}
         {batch.strategyWarning && (
-          <p className="mt-3 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
+          <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-5 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
             {batch.strategyWarning}
           </p>
         )}
       </div>
       {batch.status === 'FAILED' && batch.lastError && (
-        <div className="rounded-2xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-          <p className="font-bold">Son hata</p>
+        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+          <p className="font-semibold">Son hata</p>
           <p className="mt-1 break-words leading-6">{batch.lastError}</p>
         </div>
       )}
       <div>
-        <h3 className="text-sm font-bold text-slate-800">Model seçimi</h3>
-        <div className="mt-3 divide-y divide-slate-100 rounded-2xl border border-slate-100">
+        <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Model seçimi</h3>
+        <div className="mt-3 divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
           {[
             ['Metin', batch.textProvider, batch.textModel],
             ['Görsel', batch.imageProvider, batch.imageModel],
             ['Video', batch.videoProvider, batch.videoModel],
           ].filter(([, provider]) => provider).map(([label, provider, model]) => (
-            <div key={label} className="flex items-center justify-between gap-4 px-4 py-3 text-sm">
-              <span className="font-semibold text-slate-500">{label}</span>
-              <span className="text-right font-bold text-slate-800">{provider} · {model}</span>
+            <div key={label} className="flex items-center justify-between gap-4 bg-white px-4 py-3 text-sm dark:bg-slate-900/30">
+              <span className="font-medium text-slate-500 dark:text-slate-400">{label}</span>
+              <span className="text-right font-semibold text-slate-800 dark:text-slate-200">{provider} · {model}</span>
             </div>
           ))}
         </div>
       </div>
       <div>
-        <h3 className="text-sm font-bold text-slate-800">Kaynaklar</h3>
+        <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Kaynaklar</h3>
         <div className="mt-3 space-y-2">
-          {!batch.sources?.length && <p className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-500">Kaynak eklenmemiş.</p>}
+          {!batch.sources?.length && <p className="rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-3 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-400">Kaynak eklenmemiş.</p>}
           {batch.sources?.map((source) => {
             const sourceMeta = SOURCE_STATUS_META[source.status] || SOURCE_STATUS_META.DEFAULT;
             return (
-              <div key={source.id} className="flex flex-col gap-2 rounded-xl border border-slate-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div key={source.id} className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900/30 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0">
-                  <p className="text-xs font-bold uppercase tracking-wide text-slate-400">{source.sourceType}</p>
-                  <p className="mt-1 truncate text-sm font-medium text-slate-700">{source.sourceValue}</p>
-                  {source.errorMessage && <p className="mt-1 text-xs text-rose-600">{source.errorMessage}</p>}
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">{source.sourceType}</p>
+                  <p className="mt-1 truncate text-sm font-medium text-slate-700 dark:text-slate-200">{source.sourceValue}</p>
+                  {source.errorMessage && <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">{source.errorMessage}</p>}
                 </div>
                 <StatusBadge label={sourceMeta.label} tone={sourceMeta.tone} />
               </div>
@@ -421,13 +658,13 @@ function BatchDetail({ batch, loading, retryBusy, onRetry, onClose }) {
           })}
         </div>
       </div>
-      <div className="flex justify-end gap-3">
+      <div className="flex flex-col-reverse gap-3 border-t border-slate-200 pt-5 dark:border-slate-800 sm:flex-row sm:justify-end">
         {batch.status === 'FAILED' && (
-          <Button onClick={onRetry} disabled={retryBusy}>
+          <Button className="w-full sm:w-auto" onClick={onRetry} disabled={retryBusy}>
             {retryBusy ? 'Başlatılıyor…' : 'Tekrar dene'}
           </Button>
         )}
-        <Button variant="secondary" onClick={onClose} disabled={retryBusy}>Kapat</Button>
+        <Button variant="secondary" className="w-full sm:w-auto" onClick={onClose} disabled={retryBusy}>Kapat</Button>
       </div>
     </div>
   );
@@ -437,6 +674,7 @@ export default function BatchesPage({ notify }) {
   const [createOpen, setCreateOpen] = useState(false);
   const [platforms, setPlatforms] = useState([]);
   const [models, setModels] = useState([]);
+  const [generationLimits, setGenerationLimits] = useState(null);
   const [metadataLoading, setMetadataLoading] = useState(true);
   const [metadataError, setMetadataError] = useState(null);
   const [data, setData] = useState(null);
@@ -451,14 +689,16 @@ export default function BatchesPage({ notify }) {
   const loadMetadata = useCallback(async () => {
     setMetadataLoading(true);
     try {
-      const [platformItems, text, image, video] = await Promise.all([
+      const [platformItems, text, image, video, generalSettings] = await Promise.all([
         api.getPlatforms(),
         api.getAiModels({ capability: 'TEXT' }),
         api.getAiModels({ capability: 'IMAGE' }),
         api.getAiModels({ capability: 'VIDEO' }),
+        api.getGeneralSettings(),
       ]);
       setPlatforms(platformItems);
       setModels([...text, ...image, ...video]);
+      setGenerationLimits(generalSettings);
       setMetadataError(null);
     } catch (metadataLoadError) {
       setMetadataError(metadataLoadError);
@@ -568,15 +808,15 @@ export default function BatchesPage({ notify }) {
         eyebrow="Toplu üretim"
         title="İçerik üretim merkezi"
         description="Kaynakları, yayın biçimini ve yapay zekâ modellerini seçin; üretim sürecini tek ekrandan izleyin."
-        action={<Button size="lg" onClick={() => setCreateOpen(true)}>＋ Yeni üretim</Button>}
+        action={<Button size="lg" className="w-full sm:w-auto" onClick={() => setCreateOpen(true)}>＋ Yeni üretim</Button>}
       />
 
       {metadataError && <div className="mb-5"><ErrorState error={metadataError} onRetry={loadMetadata} /></div>}
 
       <Card className="overflow-hidden">
-        <div className="flex flex-col gap-4 border-b border-slate-100 p-5 sm:flex-row sm:items-center sm:justify-between">
-          <div><h2 className="font-bold text-slate-900">Üretim geçmişi</h2><p className="mt-1 text-xs text-slate-400">Devam eden üretimler otomatik yenilenir.</p></div>
-          <div className="grid gap-2 sm:grid-cols-3">
+        <div className="flex flex-col gap-5 border-b border-slate-200 bg-slate-50/60 p-5 dark:border-slate-800 dark:bg-slate-900/35 lg:flex-row lg:items-end lg:justify-between sm:p-6">
+          <div><h2 className="text-base font-semibold text-slate-950 dark:text-slate-100">Üretim geçmişi</h2><p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">Devam eden üretimler otomatik yenilenir.</p></div>
+          <div className="grid gap-2 sm:grid-cols-3 lg:min-w-[34rem]">
             <Select value={filters.status} onChange={(event) => setFilter('status', event.target.value)} className="min-w-36">
               <option value="">Tüm durumlar</option>
               {Object.entries(BATCH_STATUS_META).filter(([key]) => key !== 'DEFAULT').map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}
@@ -592,35 +832,35 @@ export default function BatchesPage({ notify }) {
           </div>
         </div>
 
-        <div className="p-5">
+        <div className="p-4 sm:p-6">
           {loading && <Spinner label="Üretimler yükleniyor" />}
           {!loading && error && <ErrorState error={error} onRetry={() => loadBatches()} />}
           {!loading && !error && !data?.items?.length && (
             <EmptyState title="Henüz üretim yok" description="İlk toplu içerik üretiminizi başlatın; ilerlemeyi buradan takip edin." action={<Button onClick={() => setCreateOpen(true)}>Yeni üretim</Button>} />
           )}
           {!loading && !error && data?.items?.length > 0 && (
-            <div className="space-y-3">
+            <div className="space-y-2.5">
               {data.items.map((batch) => {
                 const meta = BATCH_STATUS_META[batch.status] || BATCH_STATUS_META.DEFAULT;
                 const progress = batch.requestedCount ? (batch.completedCount / batch.requestedCount) * 100 : 0;
                 return (
                   <button
                     key={batch.id}
-                    className="grid w-full gap-4 rounded-2xl border border-slate-100 p-4 text-left transition hover:border-indigo-200 hover:shadow-sm lg:grid-cols-[1.2fr_1fr_1fr_160px] lg:items-center"
+                    className="group grid w-full gap-4 rounded-xl border border-slate-200 bg-white p-4 text-left transition-colors hover:border-blue-300 hover:bg-slate-50/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30 dark:border-slate-800 dark:bg-slate-900/30 dark:hover:border-blue-800 dark:hover:bg-slate-800/50 sm:p-5 lg:grid-cols-[minmax(0,1.2fr)_auto_minmax(180px,.8fr)_auto] lg:items-center"
                     onClick={() => setSelectedId(batch.id)}
                   >
                     <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2"><StatusBadge label={meta.label} tone={meta.tone} /><span className="text-xs font-semibold text-slate-400">{formatDateTime(batch.createdAt)}</span></div>
-                      <p className="mt-2 truncate font-bold text-slate-900">{PLATFORM_LABELS[batch.platform] || batch.platform} · {CONTENT_TYPE_LABELS[batch.contentType] || batch.contentType}</p>
-                      <p className="mt-1 truncate text-xs text-slate-400">{batch.textProvider} · {batch.textModel}</p>
+                      <div className="flex flex-wrap items-center gap-2"><StatusBadge label={meta.label} tone={meta.tone} /><span className="text-xs font-medium text-slate-400 dark:text-slate-500">{formatDateTime(batch.createdAt)}</span></div>
+                      <p className="mt-2.5 truncate font-semibold text-slate-950 dark:text-slate-100">{batch.title || 'Başlıksız üretim'}</p>
+                      <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{PLATFORM_LABELS[batch.platform] || batch.platform} · {CONTENT_TYPE_LABELS[batch.contentType] || batch.contentType} · {batch.textProvider} · {batch.textModel}</p>
                     </div>
-                    <div className="flex gap-2 text-xs font-semibold text-slate-500">
-                      {batch.includeImage && <span className="rounded-lg bg-slate-100 px-2.5 py-1.5">Görsel</span>}
-                      {batch.includeVideo && <span className="rounded-lg bg-slate-100 px-2.5 py-1.5">Video</span>}
-                      {!batch.includeImage && !batch.includeVideo && <span>Yalnızca metin</span>}
+                    <div className="flex flex-wrap gap-2 text-xs font-medium text-slate-600 dark:text-slate-300">
+                      {batch.includeImage && <span className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 dark:border-slate-700 dark:bg-slate-800">Görsel</span>}
+                      {batch.includeVideo && <span className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 dark:border-slate-700 dark:bg-slate-800">Video</span>}
+                      {!batch.includeImage && !batch.includeVideo && <span className="py-1.5">Yalnızca metin</span>}
                     </div>
                     <Progress value={progress} label={`${batch.completedCount} / ${batch.requestedCount} hazır`} />
-                    <span className="text-right text-xs font-bold text-indigo-600">Ayrıntıları görüntüle →</span>
+                    <span className="text-xs font-semibold text-blue-600 transition-colors group-hover:text-blue-700 dark:text-blue-400 dark:group-hover:text-blue-300 lg:text-right">Ayrıntıları görüntüle →</span>
                   </button>
                 );
               })}
@@ -636,11 +876,19 @@ export default function BatchesPage({ notify }) {
         ) : !platforms.length ? (
           <ErrorState error={metadataError || new Error('Platform metadata listesi boş döndü.')} onRetry={loadMetadata} />
         ) : (
-          <BatchForm platforms={platforms} models={models} onCreated={handleCreated} notify={notify} />
+          <BatchForm platforms={platforms} models={models} limits={generationLimits} onCreated={handleCreated} notify={notify} />
         )}
       </Modal>
 
-      <Modal open={Boolean(selectedId)} title="Üretim ayrıntıları" description={selectedBatch ? `Üretim kimliği: ${selectedBatch.id}` : 'Üretim bilgileri'} onClose={closeDetail} size="lg">
+      <Modal
+        open={Boolean(selectedId)}
+        title={selectedBatch?.title || 'Üretim ayrıntıları'}
+        description={selectedBatch
+          ? `${PLATFORM_LABELS[selectedBatch.platform] || selectedBatch.platform} · ${CONTENT_TYPE_LABELS[selectedBatch.contentType] || selectedBatch.contentType}`
+          : 'Üretim bilgileri'}
+        onClose={closeDetail}
+        size="lg"
+      >
         <BatchDetail
           batch={selectedBatch}
           loading={detailLoading}

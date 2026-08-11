@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 import {
   CONTENT_STATUS_META,
@@ -29,7 +29,48 @@ import {
   Textarea,
 } from '../components/ui';
 
-function MediaPreview({ content, media }) {
+const SCHEDULABLE_STATUSES = new Set(['DRAFT', 'SCHEDULED', 'FAILED']);
+function canScheduleContent(content) {
+  return Boolean(content && SCHEDULABLE_STATUSES.has(content.status));
+}
+
+function ReviewDecisionButtons({ content, onChanged, notify }) {
+  const [busy, setBusy] = useState('');
+
+  if (content.status !== 'REVIEW_REQUIRED') {
+    return null;
+  }
+
+  const decide = async (decision) => {
+    setBusy(decision);
+    try {
+      const updated = decision === 'PUBLISHED'
+        ? await api.markReviewPublished(content.id)
+        : await api.markReviewFailed(content.id);
+      notify(decision === 'PUBLISHED'
+        ? 'İçerik yayınlandı olarak işaretlendi.'
+        : 'İçerik başarısız olarak işaretlendi.');
+      onChanged(updated);
+    } catch (error) {
+      notify(error.message, 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  return (
+    <>
+      <Button size="sm" variant="soft" disabled={Boolean(busy)} onClick={() => decide('PUBLISHED')}>
+        {busy === 'PUBLISHED' ? 'İşaretleniyor…' : 'Yayınlandı olarak işaretle'}
+      </Button>
+      <Button size="sm" variant="danger" disabled={Boolean(busy)} onClick={() => decide('FAILED')}>
+        {busy === 'FAILED' ? 'İşaretleniyor…' : 'Başarısız olarak işaretle'}
+      </Button>
+    </>
+  );
+}
+
+function MediaPreview({ content, media, compact = false }) {
   const source = media.resourcePath
     ? api.mediaUrl(content.id, media.mediaType)
     : media.publicUrl;
@@ -37,17 +78,17 @@ function MediaPreview({ content, media }) {
 
   if (!previewAvailable) {
     return (
-      <div className="flex aspect-video min-h-36 flex-col items-center justify-center rounded-xl bg-gradient-to-br from-slate-100 to-indigo-50 px-4 text-center">
-        <span className="text-2xl">{media.mediaType === 'IMAGE' ? '▧' : '▷'}</span>
-        <p className="mt-2 text-xs font-bold text-slate-600">Önizleme bulunmuyor</p>
+      <div className={`flex flex-col items-center justify-center border-dashed border-slate-200 bg-slate-50 px-4 text-center dark:border-slate-700 dark:bg-slate-900/60 ${compact ? 'h-full min-h-44' : 'aspect-video min-h-36 rounded-xl border'}`}>
+        <span className="grid h-9 w-9 place-items-center rounded-lg border border-slate-200 bg-white text-base text-slate-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-500">{media.mediaType === 'IMAGE' ? '▧' : '▷'}</span>
+        <p className="mt-2.5 text-xs font-semibold text-slate-500 dark:text-slate-400">Önizleme bulunmuyor</p>
       </div>
     );
   }
 
   if (media.mediaType === 'VIDEO') {
-    return <video className="aspect-video w-full rounded-xl bg-slate-950 object-contain" src={source} controls preload="metadata" />;
+    return <video className={`${compact ? 'h-full min-h-44 w-full object-cover' : 'aspect-video w-full rounded-lg object-contain'} bg-slate-950`} src={source} controls preload="metadata" />;
   }
-  return <img className="aspect-video w-full rounded-xl bg-slate-100 object-contain" src={source} alt="İçerik medyası" />;
+  return <img className={`${compact ? 'h-full min-h-44 w-full object-cover' : 'aspect-video w-full rounded-lg object-contain'} bg-slate-100 dark:bg-slate-900`} src={source} alt="İçerik medyası" />;
 }
 
 function ScheduleForm({ content, onSaved, notify }) {
@@ -60,6 +101,10 @@ function ScheduleForm({ content, onSaved, notify }) {
 
   const submit = async (event) => {
     event.preventDefault();
+    if (!canScheduleContent(content)) {
+      notify('Bu içerik mevcut durumundayken planlanamaz. Sayfayı yenileyip durumunu kontrol edin.', 'error');
+      return;
+    }
     const scheduledIso = toIsoFromLocal(scheduledAt);
     if (!scheduledIso || new Date(scheduledIso) <= new Date()) {
       notify('Geçerli ve gelecekte bir tarih ve saat girin.', 'error');
@@ -80,40 +125,22 @@ function ScheduleForm({ content, onSaved, notify }) {
   return (
     <form onSubmit={submit}>
       {content.status === 'FAILED' && (
-        <div className="mb-5 rounded-2xl border border-rose-100 bg-rose-50 p-4 text-sm text-rose-700">
-          <p className="font-bold">Son yayınlama başarısız</p>
+        <div className="mb-5 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+          <p className="font-semibold">Son yayınlama başarısız</p>
           <p className="mt-1 leading-6">{content.failureReason || 'Hata ayrıntısı bulunmuyor.'}</p>
         </div>
       )}
       <Field label="Yayın tarihi ve saati" hint="Yerel saat diliminiz" required>
-        <LocalDateTimeInput required value={scheduledAt} onChange={setScheduledAt} />
+        <LocalDateTimeInput required maxYearsAhead={5} value={scheduledAt} onChange={setScheduledAt} />
       </Field>
-      <div className="mt-6 flex justify-end"><Button type="submit" disabled={busy}>{busy ? 'Kaydediliyor…' : action}</Button></div>
+      <div className="mt-6 flex justify-end border-t border-slate-200 pt-5 dark:border-slate-800"><Button type="submit" className="w-full sm:w-auto" disabled={busy}>{busy ? 'Kaydediliyor…' : action}</Button></div>
     </form>
   );
 }
 
-function Attempts({ attempts, loading }) {
-  if (loading) return <Spinner label="Yayın denemeleri yükleniyor" />;
-  if (!attempts.length) return <EmptyState title="Yayın denemesi yok" description="İçerik yayınlama işlemi başladığında denemeler burada görünür." />;
-  return (
-    <div className="space-y-3">
-      {attempts.map((attempt) => (
-        <div key={attempt.id} className={`rounded-2xl border p-4 ${attempt.success ? 'border-emerald-100 bg-emerald-50/50' : 'border-rose-100 bg-rose-50/50'}`}>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <StatusBadge label={attempt.success ? 'Başarılı' : 'Başarısız'} tone={attempt.success ? 'emerald' : 'rose'} />
-            <span className="text-xs font-semibold text-slate-400">{formatDateTime(attempt.attemptedAt)}</span>
-          </div>
-          {attempt.errorMessage && <p className="mt-3 text-sm leading-6 text-rose-700">{attempt.errorMessage}</p>}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ContentDetail({ content, attempts, attemptsLoading, onChanged, onDelete, notify }) {
-  const [tab, setTab] = useState('content');
+function ContentDetail({ content, onChanged, onDelete, notify }) {
   const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState(content.title || '');
   const [text, setText] = useState(content.text);
   const [hashtags, setHashtags] = useState((content.hashtags || []).join(' '));
   const [busy, setBusy] = useState(false);
@@ -123,14 +150,20 @@ function ContentDetail({ content, attempts, attemptsLoading, onChanged, onDelete
   const isDraft = content.status === 'DRAFT';
 
   useEffect(() => {
+    setTitle(content.title || '');
     setText(content.text);
     setHashtags((content.hashtags || []).join(' '));
   }, [content]);
 
   const save = async () => {
+    const normalizedTitle = title.trim();
+    if (!normalizedTitle) {
+      notify('İçerik başlığı zorunludur.', 'error');
+      return;
+    }
     setBusy(true);
     try {
-      const updated = await api.updateContent(content.id, { text, hashtags: normalizeHashtags(hashtags) });
+      const updated = await api.updateContent(content.id, { title: normalizedTitle, text, hashtags: normalizeHashtags(hashtags) });
       notify('Taslak güncellendi.');
       setEditing(false);
       onChanged(updated);
@@ -185,52 +218,47 @@ function ContentDetail({ content, attempts, attemptsLoading, onChanged, onDelete
 
   return (
     <>
-      <div className="mb-5 flex flex-wrap items-center gap-2">
+      <h2 className="mb-4 text-xl font-semibold tracking-tight text-slate-950 dark:text-white">{content.title || 'Başlıksız içerik'}</h2>
+      <div className="mb-5 flex flex-wrap items-center gap-2 border-b border-slate-200 pb-5 dark:border-slate-800">
         <StatusBadge label={statusMeta.label} tone={statusMeta.tone} />
         <StatusBadge label={PLATFORM_LABELS[content.platform] || content.platform} tone="slate" dot={false} />
         <StatusBadge label={CONTENT_TYPE_LABELS[content.contentType] || content.contentType} tone="slate" dot={false} />
-        {content.textProvider && <span className="text-xs font-semibold text-slate-400">{content.textProvider} · {content.textModel}</span>}
+        {content.textProvider && <span className="text-xs font-medium text-slate-500 dark:text-slate-400">{content.textProvider} · {content.textModel}</span>}
       </div>
 
-      <div className="mb-6 flex gap-1 rounded-xl bg-slate-100 p-1">
-        {[['content', 'İçerik'], ['attempts', `Yayın geçmişi (${attempts.length})`]].map(([key, label]) => (
-          <button key={key} onClick={() => setTab(key)} className={`flex-1 rounded-lg px-3 py-2 text-xs font-bold transition ${tab === key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}>{label}</button>
-        ))}
-      </div>
-
-      {tab === 'attempts' ? <Attempts attempts={attempts} loading={attemptsLoading} /> : (
-        <div className="space-y-7">
+      <div className="space-y-6">
           <div>
-            <div className="mb-3 flex items-center justify-between"><h3 className="text-sm font-bold text-slate-800">Metin ve hashtag</h3>{isDraft && !editing && <Button size="sm" variant="soft" onClick={() => setEditing(true)}>Düzenle</Button>}</div>
+            <div className="mb-3 flex items-center justify-between gap-3"><h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Metin ve hashtag</h3>{isDraft && !editing && <Button size="sm" variant="soft" onClick={() => setEditing(true)}>Düzenle</Button>}</div>
             {editing ? (
-              <div className="space-y-4 rounded-2xl bg-slate-50 p-4">
+              <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-900/50 sm:p-5">
+                <Field label="İçerik başlığı" hint="En fazla 255 karakter" required><Input required maxLength={255} value={title} onChange={(event) => setTitle(event.target.value)} /></Field>
                 <Field label="İçerik metni" required><Textarea className="min-h-44" value={text} onChange={(event) => setText(event.target.value)} /></Field>
                 <Field label="Hashtag'ler" hint="Boşluk, virgül veya satır ile ayırın"><Textarea className="min-h-20" value={hashtags} onChange={(event) => setHashtags(event.target.value)} /></Field>
-                <div className="flex justify-end gap-2"><Button variant="secondary" size="sm" onClick={() => setEditing(false)}>Vazgeç</Button><Button size="sm" onClick={save} disabled={busy || !text.trim()}>{busy ? 'Kaydediliyor…' : 'Kaydet'}</Button></div>
+                <div className="flex flex-col-reverse gap-2 border-t border-slate-200 pt-4 dark:border-slate-800 sm:flex-row sm:justify-end"><Button variant="secondary" size="sm" onClick={() => setEditing(false)}>Vazgeç</Button><Button size="sm" onClick={save} disabled={busy || !title.trim() || !text.trim()}>{busy ? 'Kaydediliyor…' : 'Kaydet'}</Button></div>
               </div>
             ) : (
-              <div className="rounded-2xl bg-slate-50 p-5">
-                <p className="whitespace-pre-wrap text-sm leading-7 text-slate-700">{content.text}</p>
-                <div className="mt-4 flex flex-wrap gap-2">{content.hashtags?.map((tag) => <span key={tag} className="rounded-full bg-white px-3 py-1.5 text-xs font-bold text-indigo-600 shadow-sm">{tag}</span>)}</div>
+              <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-5 dark:border-slate-800 dark:bg-slate-900/40">
+                <p className="whitespace-pre-wrap text-sm leading-7 text-slate-700 dark:text-slate-200">{content.text}</p>
+                <div className="mt-4 flex flex-wrap gap-2">{content.hashtags?.map((tag) => <span key={tag} className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-blue-600 dark:border-slate-700 dark:bg-slate-800 dark:text-blue-300">{tag}</span>)}</div>
               </div>
             )}
           </div>
 
           <div>
-            <h3 className="mb-3 text-sm font-bold text-slate-800">Medya</h3>
+            <h3 className="mb-3 text-sm font-semibold text-slate-900 dark:text-slate-100">Medya</h3>
             <div className="grid gap-4 sm:grid-cols-2">
               {['IMAGE', 'VIDEO'].map((mediaType) => {
                 const media = mediaByType(mediaType);
                 const accept = mediaType === 'IMAGE' ? 'image/png,image/jpeg,image/gif,image/webp' : 'video/mp4';
                 return (
-                  <div key={mediaType} className="rounded-2xl border border-slate-100 p-3">
-                    {media ? <MediaPreview content={content} media={media} /> : <div className="flex aspect-video items-center justify-center rounded-xl bg-slate-50 text-xs font-semibold text-slate-400">{MEDIA_TYPE_LABELS[mediaType]} eklenmemiş</div>}
-                    <div className="mt-3 flex items-center justify-between gap-2">
-                      <div><p className="text-sm font-bold text-slate-700">{MEDIA_TYPE_LABELS[mediaType]}</p>{media?.modelProvider && <p className="mt-0.5 text-[10px] text-slate-400">{media.modelProvider} · {media.modelId}</p>}</div>
+                  <div key={mediaType} className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900/30">
+                    {media ? <MediaPreview content={content} media={media} /> : <div className="flex aspect-video items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 text-xs font-medium text-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-500">{MEDIA_TYPE_LABELS[mediaType]} eklenmemiş</div>}
+                    <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div><p className="text-sm font-semibold text-slate-700 dark:text-slate-200">{MEDIA_TYPE_LABELS[mediaType]}</p>{media?.modelProvider && <p className="mt-0.5 text-[10px] text-slate-400 dark:text-slate-500">{media.modelProvider} · {media.modelId}</p>}</div>
                       {isDraft && (
-                        <div className="flex gap-2">
+                        <div className="flex flex-wrap gap-2">
                           {media && <Button variant="danger" size="sm" disabled={mediaBusy === mediaType} onClick={() => removeMedia(mediaType)}>Sil</Button>}
-                          <label className="inline-flex min-h-9 cursor-pointer items-center rounded-xl bg-indigo-50 px-3 text-xs font-bold text-indigo-700 transition hover:bg-indigo-100">
+                          <label className="inline-flex min-h-9 cursor-pointer items-center rounded-lg bg-blue-50 px-3 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-100 dark:bg-blue-950/60 dark:text-blue-300 dark:hover:bg-blue-900/70">
                             <input type="file" className="sr-only" accept={accept} onChange={(event) => uploadMedia(mediaType, event.target.files?.[0])} />
                             {mediaBusy === mediaType ? 'Yükleniyor…' : media ? 'Değiştir' : 'Yükle'}
                           </label>
@@ -243,21 +271,21 @@ function ContentDetail({ content, attempts, attemptsLoading, onChanged, onDelete
             </div>
           </div>
 
-          <div className="rounded-2xl border border-slate-100 p-4">
+          <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-4 dark:border-slate-800 dark:bg-slate-900/40 sm:p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div><p className="text-sm font-bold text-slate-800">Yayın planı</p><p className="mt-1 text-xs text-slate-500">{content.scheduledAt ? formatDateTime(content.scheduledAt) : content.status === 'PUBLISHED' ? `Yayınlandı: ${formatDateTime(content.publishedAt)}` : 'Henüz planlanmadı'}</p></div>
+              <div><p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Yayın planı</p><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{content.scheduledAt ? formatDateTime(content.scheduledAt) : content.status === 'PUBLISHED' ? `Yayınlandı: ${formatDateTime(content.publishedAt)}` : 'Henüz planlanmadı'}</p></div>
               <div className="flex flex-wrap gap-2">
                 {content.status === 'SCHEDULED' && <Button variant="danger" size="sm" disabled={busy} onClick={cancelSchedule}>Planı iptal et</Button>}
-                {content.status !== 'PUBLISHED' && <Button size="sm" onClick={() => setScheduleOpen(true)}>{content.status === 'FAILED' ? 'Yeniden dene' : content.status === 'SCHEDULED' ? 'Yeniden planla' : 'Takvime ekle'}</Button>}
+                {canScheduleContent(content) && <Button size="sm" onClick={() => setScheduleOpen(true)}>{content.status === 'FAILED' ? 'Yeniden dene' : content.status === 'SCHEDULED' ? 'Yeniden planla' : 'Takvime ekle'}</Button>}
+                <ReviewDecisionButtons content={content} onChanged={onChanged} notify={notify} />
               </div>
             </div>
           </div>
 
-          {isDraft && <div className="flex justify-end border-t border-slate-100 pt-5"><Button variant="danger" onClick={onDelete}>Taslağı sil</Button></div>}
-        </div>
-      )}
+          {isDraft && <div className="flex justify-end border-t border-slate-200 pt-5 dark:border-slate-800"><Button variant="danger" className="w-full sm:w-auto" onClick={onDelete}>Taslağı sil</Button></div>}
+      </div>
 
-      <Modal open={scheduleOpen} title={content.status === 'FAILED' ? 'Yayınlamayı yeniden dene' : 'Yayın zamanı'} description={`${PLATFORM_LABELS[content.platform]} · ${CONTENT_TYPE_LABELS[content.contentType]}`} onClose={() => setScheduleOpen(false)} size="md">
+      <Modal open={scheduleOpen} title={content.status === 'FAILED' ? 'Yayınlamayı yeniden dene' : 'Yayın zamanı'} description={`${content.title || 'Başlıksız içerik'} · ${PLATFORM_LABELS[content.platform]} · ${CONTENT_TYPE_LABELS[content.contentType]}`} onClose={() => setScheduleOpen(false)} size="md">
         <ScheduleForm content={content} notify={notify} onSaved={(updated) => { setScheduleOpen(false); onChanged(updated); }} />
       </Modal>
     </>
@@ -272,18 +300,18 @@ export default function ContentsPage({ notify }) {
   };
   const [platforms, setPlatforms] = useState([]);
   const [data, setData] = useState(null);
-  const [filters, setFilters] = useState({ status: statusFromHash(), platform: '', batchId: '', page: 0, size: 20 });
-  const [batchInput, setBatchInput] = useState('');
+  const [filters, setFilters] = useState({ status: statusFromHash(), platform: '', title: '', page: 0, size: 20 });
+  const [searchInput, setSearchInput] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [content, setContent] = useState(null);
-  const [attempts, setAttempts] = useState([]);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [attemptsLoading, setAttemptsLoading] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [scheduleTarget, setScheduleTarget] = useState(null);
+  const [statusCounts, setStatusCounts] = useState(null);
+  const [countRefresh, setCountRefresh] = useState(0);
 
   useEffect(() => { api.getPlatforms().then(setPlatforms).catch(() => {}); }, []);
   useEffect(() => {
@@ -306,11 +334,25 @@ export default function ContentsPage({ notify }) {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setStatusCounts(null);
+    api.getContentStatusCounts({
+      platform: filters.platform,
+      title: filters.title,
+    }).then((counts) => {
+      if (cancelled) return;
+      setStatusCounts(counts);
+    }).catch(() => {
+      if (!cancelled) setStatusCounts({});
+    });
+    return () => { cancelled = true; };
+  }, [countRefresh, filters.platform, filters.title]);
+
   const openDetail = useCallback(async (id) => {
     setSelectedId(id);
     setContent(null);
     setDetailLoading(true);
-    setAttemptsLoading(true);
     try {
       const detail = await api.getContent(id);
       setContent(detail);
@@ -319,14 +361,6 @@ export default function ContentsPage({ notify }) {
       setSelectedId(null);
     } finally {
       setDetailLoading(false);
-    }
-    try {
-      setAttempts(await api.getPublishAttempts(id));
-    } catch (attemptError) {
-      notify(attemptError.message, 'error');
-      setAttempts([]);
-    } finally {
-      setAttemptsLoading(false);
     }
   }, [notify]);
 
@@ -353,19 +387,15 @@ export default function ContentsPage({ notify }) {
 
   const setFilter = (name, value) => setFilters((current) => ({ ...current, [name]: value, page: name === 'page' ? value : 0 }));
 
-  const applyBatchFilter = (event) => {
+  const applySearchFilter = (event) => {
     event.preventDefault();
-    const value = batchInput.trim();
-    if (value && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
-      notify('Geçerli bir üretim kimliği girin.', 'error');
-      return;
-    }
-    setFilter('batchId', value);
+    setFilter('title', searchInput.trim());
   };
 
   const changed = (updated) => {
     setContent(updated);
     setData((current) => current ? { ...current, items: current.items.map((item) => item.id === updated.id ? updated : item) } : current);
+    setCountRefresh((current) => current + 1);
   };
 
   const confirmDelete = async () => {
@@ -377,6 +407,7 @@ export default function ContentsPage({ notify }) {
       setSelectedId(null);
       setContent(null);
       load();
+      setCountRefresh((current) => current + 1);
     } catch (deleteError) {
       notify(deleteError.message, 'error');
     } finally {
@@ -384,35 +415,34 @@ export default function ContentsPage({ notify }) {
     }
   };
 
-  const statusCounts = useMemo(() => {
-    const counts = Object.fromEntries(Object.keys(CONTENT_STATUS_META).filter((key) => key !== 'DEFAULT').map((key) => [key, 0]));
-    data?.items?.forEach((item) => { counts[item.status] = (counts[item.status] || 0) + 1; });
-    return counts;
-  }, [data]);
-
   return (
     <>
       <PageHeader eyebrow="Taslak yönetimi" title="İçerik kütüphanesi" description="Üretilen içerikleri düzenleyin, medyalarını yönetin ve yayın akışına alın." />
 
-      <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+      <div className="mb-5 grid grid-cols-2 gap-2.5 md:grid-cols-3 xl:grid-cols-6">
         {Object.entries(CONTENT_STATUS_META).filter(([key]) => key !== 'DEFAULT').map(([key, meta]) => (
-          <button key={key} onClick={() => setFilter('status', filters.status === key ? '' : key)} className={`rounded-2xl border p-4 text-left transition ${filters.status === key ? 'border-indigo-300 bg-indigo-50' : 'border-slate-200 bg-white hover:border-slate-300'}`}>
-            <p className="text-xs font-bold text-slate-400">{meta.label}</p><p className="mt-2 text-2xl font-extrabold text-slate-900">{statusCounts[key] ?? 0}</p><p className="mt-1 text-[10px] text-slate-400">Bu sayfadaki kayıt</p>
+          <button
+            key={key}
+            aria-pressed={filters.status === key}
+            onClick={() => setFilter('status', filters.status === key ? '' : key)}
+            className={`rounded-xl border p-3.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30 sm:p-4 ${filters.status === key ? 'border-blue-400 bg-blue-50/70 dark:border-blue-700 dark:bg-blue-950/30' : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/60 dark:border-slate-800 dark:bg-slate-900/40 dark:hover:border-slate-700 dark:hover:bg-slate-800/50'}`}
+          >
+            <p className={`text-xs font-semibold ${filters.status === key ? 'text-blue-700 dark:text-blue-300' : 'text-slate-500 dark:text-slate-400'}`}>{meta.label}</p><p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950 dark:text-white">{statusCounts?.[key] ?? '—'}</p><p className="mt-1 text-[10px] text-slate-400 dark:text-slate-500">Toplam kayıt</p>
           </button>
         ))}
       </div>
 
       <Card className="overflow-hidden">
-        <div className="grid gap-3 border-b border-slate-100 p-5 sm:grid-cols-3">
+        <div className="grid gap-3 border-b border-slate-200 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-900/35 sm:grid-cols-2 sm:p-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(280px,1.35fr)]">
           <Select value={filters.status} onChange={(event) => setFilter('status', event.target.value)}><option value="">Tüm durumlar</option>{Object.entries(CONTENT_STATUS_META).filter(([key]) => key !== 'DEFAULT').map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</Select>
           <Select value={filters.platform} onChange={(event) => setFilter('platform', event.target.value)}><option value="">Tüm platformlar</option>{platforms.map((item) => <option key={item.platform} value={item.platform}>{PLATFORM_LABELS[item.platform] || item.platform}</option>)}</Select>
-          <form className="flex gap-2" onSubmit={applyBatchFilter}>
-            <Input value={batchInput} onChange={(event) => setBatchInput(event.target.value)} placeholder="Üretim kimliğiyle filtrele" />
-            <Button type="submit" variant="secondary" className="shrink-0">Uygula</Button>
+          <form className="flex gap-2 sm:col-span-2 lg:col-span-1" onSubmit={applySearchFilter}>
+            <Input maxLength={255} value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="Başlık veya içerikte ara" />
+            <Button type="submit" variant="secondary" className="shrink-0">Ara</Button>
           </form>
         </div>
 
-        <div className="p-5">
+        <div className="p-4 sm:p-6">
           {loading && <Spinner label="İçerikler yükleniyor" />}
           {!loading && error && <ErrorState error={error} onRetry={load} />}
           {!loading && !error && !data?.items?.length && <EmptyState title="İçerik bulunamadı" description="Filtreleri temizleyin veya üretim ekranından yeni bir toplu üretim başlatın." action={<Button onClick={() => { window.location.hash = '#/batches'; }}>Üretime git</Button>} />}
@@ -422,20 +452,22 @@ export default function ContentsPage({ notify }) {
                 const meta = CONTENT_STATUS_META[item.status] || CONTENT_STATUS_META.DEFAULT;
                 const image = item.media?.find((media) => media.mediaType === 'IMAGE');
                 return (
-                  <article key={item.id} className="group overflow-hidden rounded-2xl border border-slate-100 bg-white transition hover:border-indigo-200 hover:shadow-md hover:shadow-slate-200/40">
-                    <button className="grid w-full text-left sm:grid-cols-[150px_1fr]" onClick={() => openDetail(item.id)}>
-                      <div className="min-h-36 bg-slate-50">
-                        {image ? <MediaPreview content={item} media={image} /> : <div className="flex h-full min-h-36 items-center justify-center bg-gradient-to-br from-slate-100 to-indigo-50 text-2xl text-slate-300">✦</div>}
+                  <article key={item.id} className="group overflow-hidden rounded-xl border border-slate-200 bg-white transition-colors hover:border-blue-300 dark:border-slate-800 dark:bg-slate-900/30 dark:hover:border-blue-800">
+                    <button className="grid w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/30 sm:grid-cols-[170px_1fr]" onClick={() => openDetail(item.id)}>
+                      <div className="min-h-44 overflow-hidden border-b border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900 sm:border-b-0 sm:border-r">
+                        {image ? <MediaPreview content={item} media={image} compact /> : <div className="flex h-full min-h-44 items-center justify-center bg-slate-50 text-slate-300 dark:bg-slate-900 dark:text-slate-700"><span className="grid h-10 w-10 place-items-center rounded-lg border border-slate-200 bg-white text-lg dark:border-slate-700 dark:bg-slate-800">✦</span></div>}
                       </div>
-                      <div className="min-w-0 p-5">
-                        <div className="flex flex-wrap items-center gap-2"><StatusBadge label={meta.label} tone={meta.tone} /><span className="text-[11px] font-bold text-slate-400">{PLATFORM_LABELS[item.platform]} · {CONTENT_TYPE_LABELS[item.contentType]}</span></div>
-                        <p className="mt-3 text-sm font-semibold leading-6 text-slate-700">{truncate(item.text, 145)}</p>
-                        <div className="mt-3 flex flex-wrap gap-1.5">{item.hashtags?.slice(0, 3).map((tag) => <span key={tag} className="text-xs font-semibold text-indigo-500">{tag}</span>)}</div>
-                        <p className="mt-4 text-[11px] font-medium text-slate-400">{item.scheduledAt ? formatDateTime(item.scheduledAt) : formatDateTime(item.createdAt)}</p>
+                      <div className="flex min-w-0 flex-col p-4 sm:p-5">
+                        <div className="flex flex-wrap items-center gap-2"><StatusBadge label={meta.label} tone={meta.tone} /><span className="text-[11px] font-semibold text-slate-400 dark:text-slate-500">{PLATFORM_LABELS[item.platform]} · {CONTENT_TYPE_LABELS[item.contentType]}</span></div>
+                        <h2 className="mt-3 truncate text-base font-semibold text-slate-950 dark:text-white">{item.title || 'Başlıksız içerik'}</h2>
+                        <p className="mt-3 text-sm font-medium leading-6 text-slate-700 dark:text-slate-200">{truncate(item.text, 145)}</p>
+                        <div className="mt-3 flex flex-wrap gap-1.5">{item.hashtags?.slice(0, 3).map((tag) => <span key={tag} className="text-xs font-medium text-blue-600 dark:text-blue-400">{tag}</span>)}</div>
+                        <p className="mt-auto pt-4 text-[11px] font-medium text-slate-400 dark:text-slate-500">{item.scheduledAt ? formatDateTime(item.scheduledAt) : formatDateTime(item.createdAt)}</p>
                       </div>
                     </button>
-                    <div className="flex justify-end gap-2 border-t border-slate-100 px-4 py-3">
-                      {item.status !== 'PUBLISHED' && <Button size="sm" variant={item.status === 'FAILED' ? 'danger' : 'soft'} onClick={() => setScheduleTarget(item)}>{item.status === 'FAILED' ? 'Yeniden dene' : item.status === 'SCHEDULED' ? 'Yeniden planla' : 'Planla'}</Button>}
+                    <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 bg-slate-50/40 px-4 py-3 dark:border-slate-800 dark:bg-slate-900/60">
+                      {canScheduleContent(item) && <Button size="sm" variant={item.status === 'FAILED' ? 'danger' : 'soft'} onClick={() => setScheduleTarget(item)}>{item.status === 'FAILED' ? 'Yeniden dene' : item.status === 'SCHEDULED' ? 'Yeniden planla' : 'Planla'}</Button>}
+                      <ReviewDecisionButtons content={item} onChanged={changed} notify={notify} />
                       <Button size="sm" variant="ghost" onClick={() => openDetail(item.id)}>Ayrıntılar</Button>
                     </div>
                   </article>
@@ -456,11 +488,11 @@ export default function ContentsPage({ notify }) {
         </div>
       </Card>
 
-      <Modal open={Boolean(selectedId)} title="İçerik ayrıntıları" description={content ? `Oluşturulma: ${formatDateTime(content.createdAt)}` : 'İçerik yükleniyor'} onClose={closeDetail} size="xl">
-        {detailLoading || !content ? <Spinner label="İçerik ayrıntıları yükleniyor" /> : <ContentDetail content={content} attempts={attempts} attemptsLoading={attemptsLoading} notify={notify} onChanged={changed} onDelete={() => setDeleteTarget(content)} />}
+      <Modal open={Boolean(selectedId)} title={content?.title || 'İçerik ayrıntıları'} description={content ? `Oluşturulma: ${formatDateTime(content.createdAt)}` : 'İçerik yükleniyor'} onClose={closeDetail} size="xl">
+        {detailLoading || !content ? <Spinner label="İçerik ayrıntıları yükleniyor" /> : <ContentDetail content={content} notify={notify} onChanged={changed} onDelete={() => setDeleteTarget(content)} />}
       </Modal>
 
-      <Modal open={Boolean(scheduleTarget)} title={scheduleTarget?.status === 'FAILED' ? 'Yayınlamayı yeniden dene' : 'Yayın zamanı'} description={scheduleTarget ? `${PLATFORM_LABELS[scheduleTarget.platform]} · ${CONTENT_TYPE_LABELS[scheduleTarget.contentType]}` : ''} onClose={() => setScheduleTarget(null)} size="md">
+      <Modal open={Boolean(scheduleTarget)} title={scheduleTarget?.status === 'FAILED' ? 'Yayınlamayı yeniden dene' : 'Yayın zamanı'} description={scheduleTarget ? `${scheduleTarget.title || 'Başlıksız içerik'} · ${PLATFORM_LABELS[scheduleTarget.platform]} · ${CONTENT_TYPE_LABELS[scheduleTarget.contentType]}` : ''} onClose={() => setScheduleTarget(null)} size="md">
         {scheduleTarget && <ScheduleForm content={scheduleTarget} notify={notify} onSaved={(updated) => { setScheduleTarget(null); changed(updated); load(); }} />}
       </Modal>
 
