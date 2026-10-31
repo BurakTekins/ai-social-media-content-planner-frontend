@@ -8,3 +8,6 @@ dist/
 .idea/
 .vscode/
 
+
+# Generated test reports
+test-results/
